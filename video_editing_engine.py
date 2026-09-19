@@ -6,17 +6,73 @@ from pathlib import Path
 VIDEO_EXT={'.mp4','.mov','.mkv','.avi','.webm','.m4v'}
 AUDIO_EXT={'.mp3','.wav','.m4a','.aac','.flac','.ogg'}
 
+# Import limits (bytes / count). Tuned for desktop editing; override with environment variables when needed.
+def _env_int(name,default):
+    try:return max(1,int(os.environ.get(name,'') or default))
+    except ValueError:return default
+MAX_IMPORT_FILE_BYTES=_env_int('LINGJIAN_MAX_FILE_BYTES',8*1024**3)      # 单个文件上限 8 GB
+MAX_IMPORT_FILE_COUNT=_env_int('LINGJIAN_MAX_FILE_COUNT',200)           # 单批文件数上限
+MAX_IMPORT_TOTAL_BYTES=_env_int('LINGJIAN_MAX_TOTAL_BYTES',40*1024**3)  # 单批总大小上限 40 GB
+MAX_MEDIA_DURATION=_env_int('LINGJIAN_MAX_DURATION_SECONDS',12*3600)     # 单个素材时长上限（秒）
+
 def run_hidden(args, **kwargs):
     kwargs.setdefault('creationflags', 0x08000000 if os.name=='nt' else 0)
     return subprocess.run(args, **kwargs)
 
-def probe_media(ffmpeg:str, path:str)->dict:
-    p=run_hidden([ffmpeg,'-hide_banner','-i',path],capture_output=True,text=True,encoding='utf-8',errors='replace')
-    text=p.stderr
+def normalize_media_path(path)->str:
+    """Stable identity for a media file: absolute, resolved, case-normalized on Windows."""
+    p=Path(path).expanduser()
+    try:p=p.resolve()
+    except OSError:p=p.absolute()
+    return os.path.normcase(str(p)) if os.name=='nt' else str(p)
+
+def media_kind(path)->str:
+    ext=Path(path).suffix.lower()
+    return 'video' if ext in VIDEO_EXT else ('audio' if ext in AUDIO_EXT else '')
+
+def validate_import_file(path,*,max_file_bytes:int=MAX_IMPORT_FILE_BYTES)->dict:
+    """Check a path before any FFmpeg work. Raises ValueError with an actionable Chinese reason."""
+    name=Path(str(path)).name or str(path);p=Path(str(path)).expanduser()
+    if not p.exists():raise ValueError(f'文件不存在：{name}')
+    if not p.is_file():raise ValueError(f'不是普通文件（可能是文件夹或设备）：{name}')
+    kind=media_kind(p)
+    if not kind:raise ValueError(f'不支持的文件格式 {p.suffix or "(无扩展名)"}：{name}。支持 '+'/'.join(sorted(e[1:] for e in VIDEO_EXT|AUDIO_EXT)))
+    if not os.access(p,os.R_OK):raise ValueError(f'没有读取权限：{name}')
+    try:size=p.stat().st_size
+    except OSError as e:raise ValueError(f'无法读取文件信息：{name}（{e.strerror or e}）')
+    if size<=0:raise ValueError(f'文件为空（0 字节）：{name}')
+    if size>max_file_bytes:raise ValueError(f'文件过大（{size/1024**3:.1f} GB，上限 {max_file_bytes/1024**3:.0f} GB）：{name}')
+    return {'path':normalize_media_path(p),'name':name,'kind':kind,'size':size}
+
+def media_cache_key(path)->str:
+    """Cache key that changes when the file is replaced: normalized path + size + mtime."""
+    src=Path(path);st=src.stat()
+    return hashlib.sha1(f'{normalize_media_path(src)}|{st.st_size}|{st.st_mtime_ns}'.encode('utf-8')).hexdigest()
+
+def thumbnail_path(cache_dir:str,path:str)->str:
+    return str(Path(cache_dir)/f'{Path(path).stem[:40]}-{media_cache_key(path)[:16]}.jpg')
+
+def probe_media(ffmpeg:str, path:str, require_video:bool=True)->dict:
+    name=Path(path).name
+    if not Path(path).is_file():raise ValueError(f'文件不存在或不是普通文件：{name}')
+    try:p=run_hidden([ffmpeg,'-hide_banner','-i',path],capture_output=True,text=True,encoding='utf-8',errors='replace')
+    except FileNotFoundError:raise ValueError('未找到 FFmpeg，请确认 ffmpeg 已安装并加入 PATH')
+    except OSError as e:raise ValueError(f'无法启动 FFmpeg：{e}')
+    text=p.stderr or ''
+    # `ffmpeg -i` without an output exits 1 even for valid media; distinguish real open errors explicitly.
+    if p.returncode not in (0,1) or 'Error opening input' in text or 'Invalid data found' in text or 'No such file' in text or 'Permission denied' in text:
+        last=[l for l in text.strip().splitlines() if l.strip()];raise ValueError(f'FFmpeg 无法识别该文件：{name}'+(f'（{last[-1].strip()[:160]}）' if last else ''))
     m=re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)',text)
-    if not m: raise ValueError(f'无法读取媒体：{Path(path).name}')
+    if not m:raise ValueError(f'无法读取媒体时长（文件可能损坏或不完整）：{name}')
     duration=int(m[1])*3600+int(m[2])*60+float(m[3])
+    if not duration>0:raise ValueError(f'媒体时长无效（{duration:.3f} 秒）：{name}')
+    if duration>MAX_MEDIA_DURATION:raise ValueError(f'媒体时长超过上限（{duration/3600:.1f} 小时）：{name}')
     video=re.search(r'Video:\s*([^,]+).*?(\d{2,5})x(\d{2,5}).*?(\d+(?:\.\d+)?)\s*fps',text)
+    if require_video:
+        if 'Video:' not in text:raise ValueError(f'文件没有视频流（可能是纯音频或损坏文件）：{name}')
+        if not video:raise ValueError(f'无法读取视频尺寸或帧率：{name}')
+        if int(video[2])<16 or int(video[3])<16:raise ValueError(f'视频尺寸无效（{video[2]}×{video[3]}）：{name}')
+        if not float(video[4])>0:raise ValueError(f'视频帧率无效：{name}')
     created=re.search(r'creation_time\s*:\s*([^\r\n]+)',text,re.I)
     creation_time=created.group(1).strip() if created else ''
     # Cameras commonly encode capture time in the filename even after metadata is lost.
@@ -25,24 +81,37 @@ def probe_media(ffmpeg:str, path:str)->dict:
     if not capture_order:
         try:capture_order=f'{Path(path).stat().st_mtime_ns:020d}'
         except OSError:capture_order=Path(path).name.lower()
-    return {'path':str(Path(path).resolve()),'name':Path(path).name,'duration':duration,'has_audio':'Audio:' in text,'width':int(video[2]) if video else 0,'height':int(video[3]) if video else 0,'codec':video[1].strip() if video else 'unknown','fps':float(video[4]) if video else 0,'needs_proxy':bool(video and ('hevc' in video[1].lower() or '10' in video[1].lower())),'creation_time':creation_time,'capture_order':capture_order}
+    try:st=Path(path).stat();size,mtime_ns=st.st_size,st.st_mtime_ns
+    except OSError:size,mtime_ns=0,0
+    return {'path':str(Path(path).resolve()),'name':name,'duration':duration,'has_audio':'Audio:' in text,'width':int(video[2]) if video else 0,'height':int(video[3]) if video else 0,'codec':video[1].strip() if video else 'unknown','fps':float(video[4]) if video else 0,'needs_proxy':bool(video and ('hevc' in video[1].lower() or '10' in video[1].lower())),'creation_time':creation_time,'capture_order':capture_order,'size':size,'mtime_ns':mtime_ns}
 
-def validate_rendered_mp4(ffmpeg:str,path:str)->dict:
+def validate_rendered_mp4(ffmpeg:str,path:str,expect_audio:bool=True)->dict:
     file=Path(path)
     if not file.exists() or file.stat().st_size<4096:raise ValueError('导出文件为空或不完整')
     meta=probe_media(ffmpeg,str(file))
     if 'h264' not in meta['codec'].lower():raise ValueError('导出视频不是 H.264 编码')
+    if expect_audio and not meta['has_audio']:raise ValueError('导出文件缺少音频流')
     p=run_hidden([ffmpeg,'-v','error','-sseof','-1','-i',str(file),'-t','0.5','-f','null','-'],capture_output=True,text=True,encoding='utf-8',errors='replace')
     if p.returncode:raise ValueError('MP4 文件尾部校验失败：'+(p.stderr or '')[-300:])
     return meta
 
 def thumbnail(ffmpeg:str,path:str,out:str,at:float=1.0):
-    run_hidden([ffmpeg,'-y','-ss',str(max(0,at)),'-i',path,'-frames:v','1','-vf','scale=320:-2',out],capture_output=True)
-    return out
+    """Write a JPEG thumbnail via a unique temp file and atomically replace ``out`` on success."""
+    target=Path(out);target.parent.mkdir(parents=True,exist_ok=True);temp=target.parent/f'.{target.stem}.{uuid.uuid4().hex[:12]}.part.jpg'
+    try:
+        p=run_hidden([ffmpeg,'-y','-v','error','-ss',str(max(0,at)),'-i',path,'-frames:v','1','-vf','scale=320:-2','-f','image2',str(temp)],capture_output=True,text=True,encoding='utf-8',errors='replace')
+        if p.returncode==0 and temp.exists() and temp.stat().st_size>0:os.replace(temp,target);return out
+        # A seek beyond the last keyframe can yield no frame; retry from the start once.
+        p=run_hidden([ffmpeg,'-y','-v','error','-i',path,'-frames:v','1','-vf','scale=320:-2','-f','image2',str(temp)],capture_output=True,text=True,encoding='utf-8',errors='replace')
+        if p.returncode==0 and temp.exists() and temp.stat().st_size>0:os.replace(temp,target);return out
+        raise ValueError(f'缩略图生成失败：{Path(path).name}'+((' · '+(p.stderr or '').strip().splitlines()[-1][:160]) if (p.stderr or '').strip() else ''))
+    except FileNotFoundError:raise ValueError('未找到 FFmpeg，请确认 ffmpeg 已安装并加入 PATH')
+    finally:
+        try:temp.unlink()
+        except OSError:pass
 
 def proxy_path(cache_dir:str,path:str)->str:
-    src=Path(path);key=hashlib.sha1(f'{src.resolve()}|{src.stat().st_size}|{src.stat().st_mtime_ns}'.encode()).hexdigest()
-    return str(Path(cache_dir)/f'{key}.proxy.mp4')
+    return str(Path(cache_dir)/f'{media_cache_key(path)}.proxy.mp4')
 
 def build_proxy_command(ffmpeg:str,source:str,out:str):
     return [ffmpeg,'-y','-i',source,'-map','0:v:0','-map','0:a:0?','-vf','scale=540:-2','-r','30','-c:v','libx264','-preset','ultrafast','-crf','28','-pix_fmt','yuv420p','-c:a','aac','-b:a','96k','-movflags','+faststart',out]

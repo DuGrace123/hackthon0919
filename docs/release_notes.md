@@ -19,3 +19,9 @@
 - 101 片段 / 365.4 秒正文顺序修复连续 5 轮通过。
 - 多轨合成、8 套创意开篇、16 音效混音旧功能回归全部通过。
 
+## 媒体导入与导出可靠性（成员 2）
+
+- 导入前统一校验路径、扩展名、大小与批次上限（可用 `LINGJIAN_MAX_FILE_BYTES` / `LINGJIAN_MAX_FILE_COUNT` / `LINGJIAN_MAX_TOTAL_BYTES` 覆盖），并用 FFmpeg 探测拒绝伪造扩展名、无视频流或时长无效的文件；重复路径不再产生重复素材或任务。
+- 缩略图、代理与导出都先写入唯一临时文件，校验通过后原子替换；失败或取消只清理本次任务的半成品，不触碰旧缓存和用户已有文件。
+- 导入、代理、导出均有可见进度与取消入口；取消会终止对应 FFmpeg 子进程并等待退出，程序关闭时不遗留后台进程。
+- 新增 `media_tasks.py` 与 `tests/test_media_pipeline.py`（`python -m tests.test_media_pipeline [样例.mp4]`）。
