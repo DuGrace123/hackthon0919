@@ -1,7 +1,7 @@
 from __future__ import annotations
-import base64,ctypes,json,mimetypes,os,re,subprocess,urllib.request,urllib.error,uuid
+import base64,ctypes,hashlib,json,math,mimetypes,os,re,subprocess,tempfile,time,urllib.request,urllib.error,urllib.parse,uuid
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 class DATA_BLOB(ctypes.Structure):_fields_=[('cbData',wintypes.DWORD),('pbData',ctypes.POINTER(ctypes.c_byte))]
@@ -25,32 +25,94 @@ def unprotect_secret(value:str)->str:
 
 @dataclass
 class APIConfig:
-    base_url:str='https://api.openai.com';api_key:str='';model:str='gpt-5-mini';transcription_model:str='gpt-4o-mini-transcribe';timeout:int=180
-    def endpoint(self,path):return self.base_url.rstrip('/')+'/v1/'+path.lstrip('/')
+    base_url:str='https://api.openai.com';api_key:str=field(default='',repr=False);model:str='gpt-5-mini';transcription_model:str='gpt-4o-mini-transcribe';timeout:int=180
+    def endpoint(self,path):
+        base=self.base_url.strip().rstrip('/');parsed=urllib.parse.urlsplit(base)
+        if parsed.scheme not in ('https','http') or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError('AI 接口地址必须是没有凭据或查询参数的 HTTP(S) 地址')
+        return base+('' if parsed.path.endswith('/v1') else '/v1')+'/'+path.lstrip('/')
+
+
+class AIRequestError(RuntimeError):
+    """A public-safe provider error, without response bodies or credentials."""
+    def __init__(self, message, code='provider_error', retryable=False):
+        super().__init__(message);self.code=code;self.retryable=retryable
+
+
+class AnalysisCancelled(RuntimeError):
+    pass
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _finite_number(value):
+    if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):
+        raise AIRequestError('AI 返回了无效的时间或评分，请重试。','invalid_response')
+    return float(value)
+
+
+def _json_object(text):
+    def reject(value):raise ValueError('Non-finite JSON number')
+    try:
+        result=json.loads(text,parse_constant=reject)
+        if not isinstance(result,dict):raise ValueError('Expected object')
+        return result
+    except (ValueError,TypeError,UnicodeError,RecursionError) as exc:
+        raise AIRequestError('AI 返回的数据格式不完整，请重试。','invalid_response',True) from exc
 
 def _request(url,data,headers,timeout):
     req=urllib.request.Request(url,data=data,headers=headers,method='POST')
     try:
-        with urllib.request.urlopen(req,timeout=timeout) as r:return json.loads(r.read().decode('utf-8'))
+        with urllib.request.build_opener(_NoRedirect()).open(req,timeout=timeout) as r:
+            raw=r.read(4*1024*1024+1)
+            if len(raw)>4*1024*1024:raise AIRequestError('AI 响应超过大小限制。','response_too_large')
+            return _json_object(raw)
     except urllib.error.HTTPError as e:
-        body=e.read().decode('utf-8','replace');raise RuntimeError(f'API HTTP {e.code}: {body[:800]}')
-    except Exception as e:raise RuntimeError('API 连接失败：'+str(e))
+        status=e.code;e.close()
+        if status in (401,403):raise AIRequestError('AI 服务认证失败，请检查服务端密钥与权限。','authentication_failed') from None
+        if status==429:raise AIRequestError('AI 服务用量或请求频率受限，请稍后重试。','rate_limited',True) from None
+        raise AIRequestError(f'AI 服务请求失败（HTTP {status}）。','provider_http_error',status>=500) from None
+    except AIRequestError:raise
+    except (urllib.error.URLError,OSError,TimeoutError):
+        raise AIRequestError('AI 服务连接失败或超时，请稍后重试。','connection_failed',True) from None
 
 def transcribe_audio(cfg:APIConfig,audio_path:str)->str:
+    if Path(audio_path).stat().st_size>24_000_000:
+        raise AIRequestError('提取音频超过上传限制，请缩短素材后重试。','audio_too_large')
     boundary='----LingJian'+uuid.uuid4().hex;parts=[]
     def field(name,value):parts.extend([f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()])
     field('model',cfg.transcription_model);field('response_format','json');file=Path(audio_path);raw=file.read_bytes();mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream';parts.extend([f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{file.name}"\r\nContent-Type: {mime}\r\n\r\n'.encode(),raw,b'\r\n',f'--{boundary}--\r\n'.encode()])
     result=_request(cfg.endpoint('audio/transcriptions'),b''.join(parts),{'Authorization':'Bearer '+cfg.api_key,'Content-Type':f'multipart/form-data; boundary={boundary}'},cfg.timeout)
-    return result.get('text','')
+    text=result.get('text')
+    if not isinstance(text,str):raise AIRequestError('AI 转写响应没有有效文本。','invalid_response')
+    return text
 
 def _output_text(result):
-    if isinstance(result.get('output_text'),str):return result['output_text']
-    for block in result.get('output',[]):
+    if result.get('status') not in (None,'completed'):
+        raise AIRequestError('AI 响应尚未完整生成，请重试。','incomplete_response',True)
+    texts=[];output=result.get('output',[])
+    if not isinstance(output,list):raise AIRequestError('AI 响应格式无效。','invalid_response')
+    for block in output:
+        if not isinstance(block,dict) or not isinstance(block.get('content',[]),list):
+            raise AIRequestError('AI 响应格式无效。','invalid_response')
         for content in block.get('content',[]):
-            if isinstance(content.get('text'),str):return content['text']
-    raise RuntimeError('API 响应中没有文本结果')
+            if not isinstance(content,dict):raise AIRequestError('AI 响应格式无效。','invalid_response')
+            if content.get('type')=='refusal':
+                raise AIRequestError('AI 服务未生成本次剪辑方案，请调整要求后重试。','refused')
+            if isinstance(content.get('text'),str):texts.append(content['text'])
+    if isinstance(result.get('output_text'),str) and result['output_text']:return result['output_text']
+    if texts:return ''.join(texts)
+    raise AIRequestError('AI 响应中没有文本结果。','invalid_response')
 
 STAGE_ORDER={'intro':0,'ingredients':1,'prep':2,'cook':3,'plate':4,'taste':5,'outro':6,'other':7}
+
+
+def _short_text(value, limit=400):
+    if not isinstance(value,str):raise AIRequestError('AI 文本字段格式无效。','invalid_response')
+    return value[:limit]
 
 def request_highlights(cfg:APIConfig,transcript:str,contact_sheet:str,duration:float,user_prompt:str)->list[dict]:
     image='data:image/jpeg;base64,'+base64.b64encode(Path(contact_sheet).read_bytes()).decode();item_props={'start':{'type':'number'},'end':{'type':'number'},'score':{'type':'number'},'reason':{'type':'string'},'caption':{'type':'string'},'role':{'type':'string','enum':['hook','setup','development','climax','outro','broll']},'stage':{'type':'string','enum':list(STAGE_ORDER)},'chapter':{'type':'string'},'shot_type':{'type':'string'},'motion':{'type':'number'},'stability':{'type':'number'},'audio_value':{'type':'number'},'visual_signature':{'type':'string'}};schema={'type':'object','properties':{'summary':{'type':'string'},'segments':{'type':'array','items':{'type':'object','properties':item_props,'required':list(item_props),'additionalProperties':False}}},'required':['summary','segments'],'additionalProperties':False}
@@ -60,27 +122,78 @@ def request_highlights(cfg:APIConfig,transcript:str,contact_sheet:str,duration:f
 stage必须判断事件阶段：intro开场、ingredients食材/对象展示、prep切洗准备、cook烹饪/执行、plate装盘/结果展示、taste试吃/验收、outro收尾、other其他。chapter写明当前事件章节。对于教程、做饭、改造、开箱等步骤型素材，成品画面可作为开头钩子，但其余步骤的stage必须按真实事件判断，不能因画面更精彩而改变阶段。
 候选镜头必须至少贡献一种价值：新事实、新动作状态、新地点、新情绪或因果转折。只有重复动作、口头填充词、离场等待、镜头尚未摆稳的片段即使清晰也要降分。优先保留目标陈述、困难/意外、关键变化、人物反应、结果验证；动作过程应选“开始—关键变化—结果”，不要把同一动作切成多段反复返回。
 用户要求：{user_prompt}\n语音转写：{transcript or '无可用语音'}\n画面超过60秒时必须覆盖开头、中段、后段和收尾的全部事件章节，不能只挑前半段；为120秒成片准备足够数量且时间分布均匀的候选。只返回可进入非线性时间线的候选，不要在单素材内决定最终顺序。'''
-    body={'model':cfg.model,'input':[{'role':'user','content':[{'type':'input_text','text':prompt},{'type':'input_image','image_url':image}]}],'text':{'format':{'type':'json_schema','name':'video_highlights','strict':True,'schema':schema}}}
-    result=_request(cfg.endpoint('responses'),json.dumps(body).encode(),{'Authorization':'Bearer '+cfg.api_key,'Content-Type':'application/json'},cfg.timeout);text=_output_text(result).strip();text=re.sub(r'^```(?:json)?|```$','',text).strip();data=json.loads(text);valid=[]
-    for s in data.get('segments',[]):
-        a=max(0,float(s['start']));b=min(duration,float(s['end']))
-        if b-a>=.5:valid.append({'start':round(a,3),'end':round(b,3),'score':max(0,min(100,float(s['score']))),'reason':str(s['reason']),'caption':str(s['caption']),'role':str(s.get('role','broll')),'stage':str(s.get('stage','other')),'chapter':str(s.get('chapter','')),'shot_type':str(s.get('shot_type','')),'motion':max(0,min(100,float(s.get('motion',50)))),'stability':max(0,min(100,float(s.get('stability',50)))),'audio_value':max(0,min(100,float(s.get('audio_value',0)))),'visual_signature':str(s.get('visual_signature',''))})
+    body={'model':cfg.model,'store':False,'input':[{'role':'user','content':[{'type':'input_text','text':prompt},{'type':'input_image','image_url':image}]}],'text':{'format':{'type':'json_schema','name':'video_highlights','strict':True,'schema':schema}}}
+    result=_request(cfg.endpoint('responses'),json.dumps(body).encode(),{'Authorization':'Bearer '+cfg.api_key,'Content-Type':'application/json'},cfg.timeout);text=_output_text(result).strip();text=re.sub(r'^```(?:json)?|```$','',text).strip();data=_json_object(text);valid=[]
+    segments=data.get('segments')
+    if not isinstance(segments,list) or len(segments)>300:raise AIRequestError('AI 候选镜头格式无效。','invalid_response')
+    for s in segments:
+        if not isinstance(s,dict):raise AIRequestError('AI 候选镜头格式无效。','invalid_response')
+        a=max(0,_finite_number(s.get('start')));b=min(duration,_finite_number(s.get('end')))
+        if b-a>=.5:valid.append({'start':round(a,3),'end':round(b,3),'score':max(0,min(100,_finite_number(s.get('score')))),'reason':_short_text(s.get('reason','')),'caption':_short_text(s.get('caption',''),200),'role':_short_text(s.get('role','broll'),30),'stage':_short_text(s.get('stage','other'),30),'chapter':_short_text(s.get('chapter',''),120),'shot_type':_short_text(s.get('shot_type',''),120),'motion':max(0,min(100,_finite_number(s.get('motion',50)))),'stability':max(0,min(100,_finite_number(s.get('stability',50)))),'audio_value':max(0,min(100,_finite_number(s.get('audio_value',0)))),'visual_signature':_short_text(s.get('visual_signature',''),200)})
     return sorted(valid,key=lambda x:x['score'],reverse=True)
 
-def extract_assets(ffmpeg:str,source:str,folder:str,duration:float):
-    folder=Path(folder);folder.mkdir(parents=True,exist_ok=True);key='v3-long36-'+str(abs(hash(str(Path(source).resolve()))));audio=folder/(key+'.m4a');sheet=folder/(key+'.jpg')
-    flags=0x08000000 if os.name=='nt' else 0
-    if not audio.exists():subprocess.run([ffmpeg,'-y','-i',source,'-vn','-ac','1','-ar','16000','-c:a','aac','-b:a','64k',str(audio)],capture_output=True,creationflags=flags)
-    interval=max(.5,duration/36)
-    if not sheet.exists():
-        p=subprocess.run([ffmpeg,'-y','-i',source,'-vf',f'fps=1/{interval:.4f},scale=180:-2,tile=6x6','-frames:v','1','-q:v','3',str(sheet)],capture_output=True,creationflags=flags)
-        if p.returncode or not sheet.exists():raise RuntimeError('无法生成 AI 画面接触表')
+def run_analysis_command(args, *, timeout=180, checkpoint=None, allow_failure=False):
+    """Run bounded FFmpeg work; reap the child on timeout or cancellation."""
+    check=checkpoint or (lambda:None)
+    check()
+    try:
+        with subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                              creationflags=0x08000000 if os.name=='nt' else 0) as process:
+            deadline=time.monotonic()+timeout
+            try:
+                while True:
+                    check()
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0:raise AIRequestError('视频分析超时，请缩短素材后重试。','analysis_timeout',True)
+                    try:
+                        stdout,stderr=process.communicate(timeout=min(.2,remaining))
+                        break
+                    except subprocess.TimeoutExpired:continue
+                check()
+            except BaseException:
+                process.kill();process.communicate();raise
+            if process.returncode and not allow_failure:
+                raise AIRequestError('无法处理视频，请检查素材格式与 FFmpeg 安装。','media_processing_failed')
+            return subprocess.CompletedProcess(args,process.returncode,stdout,stderr)
+    except OSError:
+        raise AIRequestError('无法启动 FFmpeg，请检查服务端安装。','ffmpeg_unavailable') from None
+
+
+def extract_assets(ffmpeg:str,source:str,folder:str,duration:float,*,timeout=180,checkpoint=None,has_audio=None):
+    duration=_finite_number(duration)
+    if duration<=0:raise ValueError('视频时长必须大于零')
+    folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
+    source=Path(source).resolve();stat=source.stat()
+    identity=f'v4|{source}|{stat.st_size}|{stat.st_mtime_ns}|{duration}'
+    key=hashlib.sha256(identity.encode()).hexdigest();audio=folder/(key+'.m4a');sheet=folder/(key+'.jpg')
+    options={'timeout':timeout,'checkpoint':checkpoint}
+    if has_audio is None:
+        probe=run_analysis_command([ffmpeg,'-nostdin','-hide_banner','-i',str(source)],allow_failure=True,**options)
+        has_audio=b'Audio:' in probe.stderr
+    with tempfile.TemporaryDirectory(prefix='.extract-',dir=folder) as scratch:
+        if has_audio and (not audio.exists() or audio.stat().st_size==0):
+            temporary=Path(scratch)/'audio.m4a'
+            run_analysis_command([ffmpeg,'-nostdin','-v','error','-y','-i',str(source),'-vn','-ac','1','-ar','16000','-c:a','aac','-b:a','64k',str(temporary)],**options)
+            if temporary.stat().st_size>24_000_000:raise AIRequestError('提取音频超过上传限制，请缩短素材后重试。','audio_too_large')
+            os.replace(temporary,audio)
+        if not sheet.exists() or sheet.stat().st_size==0:
+            interval=max(.5,duration/36);temporary=Path(scratch)/'contact-sheet.jpg'
+            run_analysis_command([ffmpeg,'-nostdin','-v','error','-y','-i',str(source),'-vf',f'fps=1/{interval:.6f},scale=180:102:force_original_aspect_ratio=decrease,pad=180:102:(ow-iw)/2:(oh-ih)/2,tile=6x6','-frames:v','1','-q:v','3',str(temporary)],**options)
+            if not temporary.exists() or not temporary.stat().st_size:raise AIRequestError('无法生成 AI 画面接触表。','media_processing_failed')
+            os.replace(temporary,sheet)
     return str(audio),str(sheet)
 
-def analyze_video(ffmpeg:str,cfg:APIConfig,source:str,duration:float,folder:str,prompt:str):
-    if not cfg.api_key:raise RuntimeError('请先在“AI 接口”中填写 API Key')
-    audio,sheet=extract_assets(ffmpeg,source,folder,duration);transcript=transcribe_audio(cfg,audio) if Path(audio).exists() and Path(audio).stat().st_size>1000 else ''
-    return request_highlights(cfg,transcript,sheet,duration,prompt)
+
+def analyze_video(ffmpeg:str,cfg:APIConfig,source:str,duration:float,folder:str,prompt:str,*,checkpoint=None,has_audio=None):
+    if not cfg.api_key:raise AIRequestError('请先配置服务端 AI 密钥。','authentication_failed')
+    check=checkpoint or (lambda:None)
+    audio,sheet=extract_assets(ffmpeg,source,folder,duration,timeout=cfg.timeout,checkpoint=check,has_audio=has_audio)
+    check()
+    transcript=transcribe_audio(cfg,audio) if Path(audio).exists() and Path(audio).stat().st_size>1000 else ''
+    check()
+    result=request_highlights(cfg,transcript,sheet,duration,prompt)
+    check()
+    return result
 
 def _overlap(a,b):
     if a['source_index']!=b['source_index']:return 0.0
@@ -150,7 +263,7 @@ def _candidate_rank(s):
     filler_terms=('刚刚离开','等一下','稍等','没什么','不知道说什么','嗯嗯','呃','等待','空镜','误触')
     filler=any(x in caption or x in reason for x in filler_terms)
     stage_bonus=8 if _stage_of(s) in ('ingredients','cook','plate','taste') else 0
-    return float(s.get('score',0))+.12*float(s.get('stability',50))+.1*float(s.get('audio_value',0))+stage_bonus-(32 if filler else 0)
+    return float(s.get('score',0))+.12*_finite_number(s.get('stability',50))+.1*_finite_number(s.get('audio_value',0))+stage_bonus-(32 if filler else 0)
 
 def _procedural_sort(body,analyses):
     chronological=sorted(body,key=lambda s:_source_key(s,analyses));known=[(i,STAGE_ORDER[_stage_of(s)]) for i,s in enumerate(chronological) if _stage_of(s)!='other'];effective={}
@@ -177,11 +290,11 @@ def enforce_continuity(sequence:list[dict],analyses:list[dict],user_prompt:str='
     hook=next((x for x in unique if x.get('role')=='hook'),None)
     if mode=='procedural':
         result_shots=[x for x in unique if _stage_of(x) in ('plate','taste')]
-        if result_shots:hook=max(result_shots,key=lambda s:float(s.get('score',0))+.1*float(s.get('motion',50)))
+        if result_shots:hook=max(result_shots,key=lambda s:float(s.get('score',0))+.1*_finite_number(s.get('motion',50)))
         elif hook is None:
             chronological=sorted(unique,key=lambda s:_source_key(s,analyses));tail=chronological[max(0,int(len(chronological)*.8)):]
-            hook=max(tail,key=lambda s:float(s.get('score',0))+.1*float(s.get('motion',50)))
-    if hook is None:hook=max(unique,key=lambda s:float(s.get('score',0))+.1*float(s.get('motion',50)))
+            hook=max(tail,key=lambda s:float(s.get('score',0))+.1*_finite_number(s.get('motion',50)))
+    if hook is None:hook=max(unique,key=lambda s:float(s.get('score',0))+.1*_finite_number(s.get('motion',50)))
     body=[x for x in unique if x is not hook]
     chronology_locked=target>=60 or mode=='chronological' or _reliable_capture_lock(unique,analyses,user_prompt)
     if chronology_locked:
@@ -232,7 +345,7 @@ def local_sequence(analyses:list[dict],target:float,user_prompt:str='')->list[di
     if not chosen:return []
     return enforce_continuity(chosen,analyses,user_prompt,target)
 
-def plan_sequence(cfg:APIConfig,analyses:list[dict],target:float,user_prompt:str)->list[dict]:
+def plan_sequence(cfg:APIConfig,analyses:list[dict],target:float,user_prompt:str,*,allow_fallback:bool=True)->list[dict]:
     candidates=[]
     for source_index,item in enumerate(analyses):
         for candidate_index,s in enumerate(item.get('segments',[])):
@@ -245,16 +358,20 @@ def plan_sequence(cfg:APIConfig,analyses:list[dict],target:float,user_prompt:str
     prompt=f'''你是总剪辑师。请从候选镜头中设计约{target:.1f}秒的最终顺序。用户要求：{user_prompt}\n{long_rule}\n建议节拍表：{blueprint}
 遵守：1) 前1-3秒最多一个hook；2) hook之后形成setup→development→climax→outro，最终输出必须能独立看懂，不能只是精彩镜头堆叠；3) 步骤型内容必须严格按intro→ingredients→prep→cook→plate→taste→outro单向推进，成品/试吃可在hook预览一次，但正片绝不允许从taste/plate/cook退回prep；4) 旅行与事件记录的正片按真实拍摄时间推进，口播回场只能作为当前章节的解说锚点；5) 相邻镜头必须带来新事实、新动作状态、新地点或新情绪，同时尽量变化景别；6) 去除重叠、重复构图、天花板、误触、等待和口头填充；7) 动作过程按开始—关键变化—结果组织，不拆散后反复返回；8) 尽量在动作/语句边界切，通常每镜头1.2-5.5秒；9) 总时长尽量接近目标但不可超过；10) 只能使用给定id及其时间范围；11) caption只写该镜头真实语音或必要的简短章节标题，不编造对白；12) 动作连续用cut，普通段落变化用fade/dissolve，只有节奏明显或空间变化时才少量使用wipe/slide/circle/smooth，禁止每个切点都用花哨转场；13) 情绪曲线应从好奇/目标逐步提高到困难或变化，在结果/反应处释放，并用最后一句或最后一个动作回收开场。
 候选：{compact}'''
-    body={'model':cfg.model,'input':[{'role':'user','content':[{'type':'input_text','text':prompt}]}],'text':{'format':{'type':'json_schema','name':'edit_decision_list','strict':True,'schema':schema}}}
+    body={'model':cfg.model,'store':False,'input':[{'role':'user','content':[{'type':'input_text','text':prompt}]}],'text':{'format':{'type':'json_schema','name':'edit_decision_list','strict':True,'schema':schema}}}
     try:
-        result=_request(cfg.endpoint('responses'),json.dumps(body).encode(),{'Authorization':'Bearer '+cfg.api_key,'Content-Type':'application/json'},cfg.timeout);data=json.loads(re.sub(r'^```(?:json)?|```$','',_output_text(result).strip()).strip());by_id={c['id']:c for c in candidates};out=[];used=0.0
-        for planned in data.get('sequence',[]):
+        result=_request(cfg.endpoint('responses'),json.dumps(body).encode(),{'Authorization':'Bearer '+cfg.api_key,'Content-Type':'application/json'},cfg.timeout);data=_json_object(re.sub(r'^```(?:json)?|```$','',_output_text(result).strip()).strip());by_id={c['id']:c for c in candidates};out=[];used=0.0
+        proposed=data.get('sequence')
+        if not isinstance(proposed,list) or len(proposed)>300:raise AIRequestError('AI 剪辑顺序格式无效。','invalid_response')
+        for planned in proposed:
+            if not isinstance(planned,dict):raise AIRequestError('AI 剪辑顺序格式无效。','invalid_response')
             base=by_id.get(planned.get('id'))
             if not base:continue
-            a=max(base['start'],float(planned['start']));b=min(base['end'],float(planned['end']),a+target-used)
+            a=max(base['start'],_finite_number(planned['start']));b=min(base['end'],_finite_number(planned['end']),a+target-used)
             if b-a<.5 or any(_overlap({'source_index':base['source_index'],'start':a,'end':b},x)>.32 for x in out):continue
             out.append({**base,'start':round(a,3),'end':round(b,3),'caption':str(planned['caption']),'reason':str(planned['reason']),'role':str(planned['role']),'transition':str(planned['transition'])});used+=b-a
             if used>=target-.05:break
+        if not out and not allow_fallback:raise AIRequestError('AI 没有返回可用镜头，请调整要求后重试。','no_candidates')
         if used<target*.88:
             selected={(x['source_index'],x['start'],x['end']) for x in out};remaining=sorted((c for c in candidates if (c['source_index'],c['start'],c['end']) not in selected),key=lambda c:(-float(c.get('score',0)),_source_key(c,analyses)))
             for base in remaining:
@@ -264,4 +381,5 @@ def plan_sequence(cfg:APIConfig,analyses:list[dict],target:float,user_prompt:str
                 out.append({**base,'start':round(a,3),'end':round(b,3),'caption':str(base.get('caption','')),'reason':'长视频章节补足：'+str(base.get('reason','')),'role':'development','transition':'cut'});used+=b-a
         return enforce_continuity(out,analyses,user_prompt,target) if out else local_sequence(analyses,target,user_prompt)
     except Exception:
+        if not allow_fallback:raise
         return local_sequence(analyses,target,user_prompt)

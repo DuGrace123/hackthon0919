@@ -7,6 +7,7 @@ call a model or touch source media.
 from __future__ import annotations
 
 import copy
+import math
 import re
 import uuid
 from datetime import datetime, timezone
@@ -380,6 +381,22 @@ def auto_repair_capture_order(plan:dict)->list[str]:
 
 def validate_edit_plan(plan: dict) -> dict:
     blockers, warnings = [], []
+    # Reject invalid numeric input before sorting, clamping or mutating decisions.
+    # Comparisons with NaN are false and previously let invalid timestamps pass.
+    for i, item in enumerate(plan.get("decisions") or []):
+        for key in ("start", "end", "source_duration", "mask_x", "mask_y", "mask_width",
+                    "mask_height", "mask_opacity", "mask_feather"):
+            value = item.get(key)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value)):
+                blockers.append(f"第 {i + 1} 个镜头的 {key} 必须是有限数值")
+    target = plan.get("target_duration")
+    if target is not None and (isinstance(target, bool) or not isinstance(target, (int, float))
+                               or not math.isfinite(target) or target <= 0):
+        blockers.append("目标时长必须是大于零的有限数值")
+    if blockers:
+        return {"ok": False, "blockers": blockers, "warnings": [], "repairs": [],
+                "duration": 0.0, "chronology_ratio": 0.0}
     repairs=auto_repair_capture_order(plan)
     if int(plan.get("schema_version", 0)) != PLAN_SCHEMA_VERSION:
         blockers.append("不支持的 AI 剪辑方案版本")
