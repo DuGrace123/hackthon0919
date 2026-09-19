@@ -30,6 +30,8 @@ Uploaded media, the working project, the media catalog, exports, and the account
 
 ## Clean web workspace
 
+![Light editor workspace with test media](docs/images/clean-editor.png)
+
 The light interface combines the editing layout of [OpenCut](https://github.com/OpenCut-app/opencut-classic) with the quiet file-list styling of [Square UI Files](https://github.com/zerostaticthemes/square-ui/tree/master/templates/files): a searchable media library, central source preview, clip settings, and a bottom timeline. These are visual references; the implementation uses the existing Flask templates and vanilla JavaScript, without adding a frontend build step or copying either project's source.
 
 Search filenames, filter by video/audio, or drop files into the media library. The **+** beside a video adds it to the timeline. Select a clip to trim it or add captions; transition and volume controls are under **转场与声音 / Transitions & audio**. Audio files can be imported and previewed, but the current web timeline only accepts video clips. The A1 row represents each video's source audio, not a separate audio-editing track. Source preview does not render captions or transitions; those are applied during MP4 export.

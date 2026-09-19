@@ -61,7 +61,6 @@ const translations = {
     aiAppliedMessage: 'Plan applied: {summary}. AI clips on the timeline can still be edited by hand.', aiUndoConfirm: 'Click again to confirm undo', aiPreviewShot: 'Click to preview this shot in the monitor', aiExpired: 'The AI plan is no longer available. Generate a new one.',
     aiChangeReplace: 'Replace {count} video clip(s) on the current timeline', aiChangeOverlays: 'Remove {count} overlay(s)', aiChangeSfx: 'Remove {count} sound effect(s)', aiChangeMusic: 'Keep the background music settings', aiChangeSaved: 'The project is saved to disk right after applying and can be undone in one click', aiTransition: 'AI transition: {value}',
     aiCloudHintAdmin: 'Cloud mode is not configured yet: open ', aiCloudHintLink: 'Accounts → AI Service', aiCloudHintAdminTail: ' and enter the service URL and API key.', aiCloudHintEditor: 'Cloud mode is not configured yet. Ask an administrator to enter the API settings under Accounts → AI Service.'
-
   }
 };
 
@@ -167,6 +166,7 @@ function render() {
   if (document.activeElement !== $('#projectTitle')) $('#projectTitle').value = state.project.title || '';
   if (document.activeElement !== $('#projectRatio')) $('#projectRatio').value = state.project.ratio || '9:16';
   $('#saveBtn').disabled = !state.loaded;
+  $('#aiBtn').disabled = !state.loaded;
   $('#exportBtn').disabled = !state.loaded || !state.exportReady || !state.project.clips.length;
   $('#clipCount').textContent = state.project.clips.length;
   $('#timelineDuration').textContent = t('seconds', {value: Number(state.project.duration || 0).toFixed(1)});
