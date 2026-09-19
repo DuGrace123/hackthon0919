@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>灵剪 · 账户管理</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body>
+  <header class="admin-topbar">
+    <a href="{{ url_for('index') }}" class="brand"><span>✦</span> 灵剪 <small>Web Studio</small></a>
+    <nav><a href="{{ url_for('index') }}" data-i18n="backEditor">返回编辑器</a><button id="languageToggle">EN</button><button id="logoutBtn" data-i18n="logout">退出</button></nav>
+  </header>
+  <main class="admin-shell">
+    <section class="page-heading">
+      <div><p class="eyebrow">ADMIN CONSOLE</p><h1 data-i18n="title">账户管理</h1><p data-i18n="subtitle">创建编辑成员、分配权限并维护登录状态。</p></div>
+      <div id="accountCount" class="count-card">0</div>
+    </section>
+    <div id="adminBanner" class="banner hidden" role="status"></div>
+    <section class="admin-grid">
+      <article class="panel create-panel">
+        <div class="panel-heading"><div><p class="eyebrow">NEW USER</p><h2 data-i18n="createAccount">创建账户</h2></div></div>
+        <form id="createForm">
+          <label><span data-i18n="username">用户名</span><input id="newUsername" minlength="3" maxlength="32" autocomplete="off" required></label>
+          <label><span data-i18n="password">初始密码</span><input id="newPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+          <label><span data-i18n="role">角色</span><select id="newRole"><option value="editor" data-i18n="editor">编辑成员</option><option value="admin" data-i18n="admin">管理员</option></select></label>
+          <button class="primary" type="submit" data-i18n="create">创建账户</button>
+        </form>
+        <p class="hint" data-i18n="passwordHint">密码至少 8 位。管理员可以管理其他账户；编辑成员只能使用剪辑工作区。</p>
+      </article>
+      <article class="panel users-panel">
+        <div class="panel-heading"><div><p class="eyebrow">MEMBERS</p><h2 data-i18n="allAccounts">全部账户</h2></div><button id="refreshBtn" data-i18n="refresh">刷新</button></div>
+        <div class="table-wrap"><table><thead><tr><th data-i18n="account">账户</th><th data-i18n="role">角色</th><th data-i18n="status">状态</th><th data-i18n="lastLogin">最近登录</th><th data-i18n="actions">操作</th></tr></thead><tbody id="userRows"></tbody></table></div>
+        <div id="usersEmpty" class="empty hidden" data-i18n="empty">没有账户。</div>
+      </article>
+    </section>
+  </main>
+  <dialog id="passwordDialog">
+    <form id="passwordForm" method="dialog">
+      <h3 data-i18n="resetPassword">重置密码</h3><p id="passwordTarget"></p>
+      <label><span data-i18n="newPassword">新密码</span><input id="resetPasswordInput" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+      <div class="dialog-actions"><button type="button" id="cancelPassword" data-i18n="cancel">取消</button><button class="primary" type="submit" data-i18n="save">保存</button></div>
+    </form>
+  </dialog>
+  <script src="{{ url_for('static', filename='admin.js') }}"></script>
+</body>
+</html>

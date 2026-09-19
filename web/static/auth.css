@@ -1,0 +1,32 @@
+:root { color-scheme: dark; --bg: #070c13; --panel: #101a28; --line: #29384b; --text: #f4f8fc; --muted: #91a5bb; --blue: #58a8ff; --danger: #ff7d8f; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font: 14px/1.55 Inter, "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.auth-layout { min-height: 100vh; display: grid; grid-template-columns: minmax(420px, 1.15fr) minmax(420px, .85fr); }
+.auth-showcase { position: relative; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; padding: 42px 54px; border-right: 1px solid #29415c; background: radial-gradient(circle at 25% 20%, #28588888, transparent 34%), linear-gradient(145deg, #101e30, #07101b 70%); }
+.auth-showcase::after { content: ""; position: absolute; right: -160px; bottom: -180px; width: 520px; height: 520px; border: 1px solid #4d98e844; border-radius: 50%; box-shadow: 0 0 0 70px #2769a514, 0 0 0 140px #2769a50b; }
+.showcase-brand { position: relative; z-index: 1; font-size: 25px; font-weight: 850; }
+.showcase-brand span { color: #74bbff; }
+.showcase-brand small { color: var(--muted); font-size: 12px; }
+.showcase-copy { position: relative; z-index: 1; max-width: 620px; }
+.eyebrow { margin: 0 0 9px; color: var(--blue); font-size: 10px; font-weight: 850; letter-spacing: .18em; }
+.showcase-copy h1 { max-width: 620px; margin: 0; font-size: clamp(38px, 5vw, 70px); line-height: 1.04; letter-spacing: -.04em; }
+.showcase-copy > p:last-child { max-width: 530px; margin-top: 24px; color: #aec3d8; font-size: 17px; }
+.security-note { position: relative; z-index: 1; display: flex; align-items: flex-start; gap: 13px; max-width: 500px; padding: 17px; border: 1px solid #315170; border-radius: 12px; background: #0c1b2aaa; backdrop-filter: blur(12px); }
+.security-note > span { color: #66b1ff; }
+.security-note p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.auth-panel { position: relative; display: grid; place-items: center; padding: 40px; background: radial-gradient(circle at 80% 10%, #17314c, transparent 32%), #0a111b; }
+.language-toggle { position: absolute; top: 28px; right: 32px; min-width: 52px; border: 1px solid #3b6087; border-radius: 8px; padding: 8px 12px; background: #10233a; color: #8dc8ff; cursor: pointer; font-weight: 800; }
+.auth-card { width: min(440px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 16px; background: #101a28ee; box-shadow: 0 24px 70px #0008; }
+.auth-card h2 { margin: 0; font-size: 30px; }
+.form-description { margin: 8px 0 25px; color: var(--muted); }
+form { display: grid; gap: 16px; }
+label { display: grid; gap: 7px; color: #c2d1df; font-size: 12px; font-weight: 700; }
+input, button { font: inherit; }
+input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 12px 13px; outline: none; background: #09121f; color: white; }
+input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #58a8ff20; }
+button.primary { margin-top: 5px; border: 1px solid #70b9ff; border-radius: 8px; padding: 12px; background: linear-gradient(#55a8ff, #2674ca); color: white; cursor: pointer; font-weight: 850; }
+button.primary:disabled { cursor: wait; opacity: .55; }
+.auth-banner { margin-bottom: 17px; padding: 10px 12px; border: 1px solid #713242; border-radius: 8px; background: #351923; color: #ffc3cc; font-size: 12px; }
+.privacy { margin: 20px 0 0; color: #71869d; font-size: 11px; text-align: center; }
+.hidden { display: none !important; }
+@media (max-width: 860px) { .auth-layout { grid-template-columns: 1fr; } .auth-showcase { min-height: 280px; padding: 30px; } .showcase-copy h1 { font-size: 38px; } .security-note { display: none; } .auth-panel { min-height: 580px; padding: 30px 18px; } }

@@ -15,6 +15,19 @@
 
 Cloud AI is optional. Manual editing, local analysis, and rendering work without an API key. The desktop interface uses Chinese labels; the workflow below includes the labels you will see in the application.
 
+## Web editing interface (Member 3)
+
+The repository also includes a browser-based editing workspace backed by real local APIs. Its DaVinci-inspired layout places the media library on the left, the program monitor in the center, the clip inspector on the right, and video/audio tracks across the bottom. It covers timeline ordering, trim points, subtitles, transitions, project saving, and asynchronous MP4 export. Use the **EN / 中文** button to switch the entire interface between Chinese and English. Drag clips to reorder them, drag the horizontal divider to resize the timeline, and use the timeline zoom control for finer or broader timing views; language and layout settings are remembered in the browser.
+
+```powershell
+pip install -r requirements.txt
+python web_app.py
+```
+
+Open `http://127.0.0.1:5000`. Uploaded media, the saved project, and exports are kept under `web_workspace/`. The server binds to localhost by default. The page includes empty, loading, success, and error states; uploaded originals remain in the media library when a timeline clip is removed.
+
+On the first launch, the login page asks you to create the initial administrator account. There is no default username or password. Account records are stored in `web_workspace/accounts.sqlite3`; passwords are stored as one-way hashes, and authenticated write requests use a session-bound CSRF token. Administrators can open **账户管理 / Accounts** from the editor header to create editors or other administrators, change roles, enable or disable access, reset passwords, and delete accounts. The application prevents deletion or deactivation of the current user and the last active administrator.
+
 ## Get started
 
 ### Use the Windows installer
@@ -102,6 +115,9 @@ Model files, installers, and generated videos are excluded by `.gitignore`, so a
 ├── creative_treatment.py      # Whole-video caption, motion, sound, and music choices
 ├── editing_preferences.py     # Preferences learned from user-edited timelines
 ├── person_segmentation.py     # Local person segmentation and tracking
+├── web_app.py                 # Authenticated local web editor and API
+├── web_auth.py                # SQLite account store and validation
+├── web/                       # Login, account-management, and editing interfaces
 ├── builtin_music.py           # Bundled music metadata and generation
 ├── builtin_sound_effects.py   # Bundled sound-effect metadata and generation
 ├── backend/
