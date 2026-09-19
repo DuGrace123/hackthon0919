@@ -1,7 +1,7 @@
 """Member 1 + Member 4: actual ProjectStore, mounted HTTP routes and FFmpeg."""
 import copy
-import json
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -26,14 +26,17 @@ class StoreIntegrationGuards(unittest.TestCase):
 
     def test_content_token_blocks_same_revision_desktop_replacement(self):
         original = self.store.create('原工程')
-        token = project_version_token(original)
-        # Desktop save has no revision envelope, so ProjectStore reads revision 1 again.
         file = self.store.projects_dir / (original.id + '.ljproject')
-        Project('桌面端新修改').save(file)
-        self.assertEqual(self.store.get(original.id).revision, 1)
+        Project('桌面端第一次修改').save(file)
+        first = self.store.get(original.id)
+        token = project_version_token(first)
+        # Without an intervening store.save, two external rewrites both appear
+        # as metadata revision + 1. The content token distinguishes them.
+        Project('桌面端第二次修改').save(file)
+        self.assertEqual(self.store.get(original.id).revision, first.revision)
         with self.assertRaises(RevisionConflict):
-            self.store.save(original.id, original.project, 1, expected_token=token)
-        self.assertEqual(self.store.get(original.id).project['title'], '桌面端新修改')
+            self.store.save(original.id, first.project, first.revision, expected_token=token)
+        self.assertEqual(self.store.get(original.id).project['title'], '桌面端第二次修改')
 
     def test_nonfinite_payload_is_rejected_before_persistence(self):
         for project in [{'bgm_volume': float('nan')}, {'edit_plan': {'score': float('inf')}},
@@ -138,7 +141,7 @@ class BackendAIIntegrationTests(unittest.TestCase):
         (self.store.projects_dir / (self.pid + '.ljproject')).write_text('corrupt')
         with patch.object(logging.getLogger('backend.project_store'), 'warning'):
             recovered = self.store.get(self.pid)
-            self.assertEqual(recovered.revision, 1)
+            self.assertEqual(recovered.revision, 3)
             self.assertTrue(recovered.recovered_from_backup)
             response = self.client.post(plan_url + '/apply', json={'revision': 1, 'confirm': True})
         self.assertEqual(response.status_code, 409, response.text)
@@ -179,6 +182,27 @@ class BackendAIIntegrationTests(unittest.TestCase):
         self.assertEqual(self.client.get(plan_url).json()['status'], 'ready')
         retry = self.client.post(plan_url + '/apply', json={'revision': 1, 'confirm': True})
         self.assertEqual(retry.status_code, 200, retry.text)
+
+    def test_metadata_write_failure_still_tracks_committed_apply_and_undo(self):
+        plan_url, _ = self.ready()
+        real_replace = os.replace
+
+        def fail_metadata(src, dst):
+            if str(dst).endswith('.meta.json'):
+                raise OSError('metadata disk write failed')
+            return real_replace(src, dst)
+
+        with patch('video_editing_engine.os.replace', side_effect=fail_metadata):
+            applied = self.client.post(plan_url + '/apply', json={'revision': 1, 'confirm': True})
+        self.assertEqual(applied.status_code, 200, applied.text)
+        self.assertEqual(applied.json()['status'], 'applied')
+        self.assertEqual(applied.json()['revision'], self.store.get(self.pid).revision)
+        with patch('video_editing_engine.os.replace', side_effect=fail_metadata):
+            undone = self.client.post(plan_url + '/undo', json={'revision': 2})
+        self.assertEqual(undone.status_code, 200, undone.text)
+        self.assertEqual(undone.json()['status'], 'undone')
+        self.assertEqual(undone.json()['revision'], self.store.get(self.pid).revision)
+        self.assertEqual(self.store.get(self.pid).project, self.record['project'])
 
     def test_restarting_service_keeps_project_but_expires_in_memory_plans(self):
         plan_url, _ = self.ready()

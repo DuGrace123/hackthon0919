@@ -1,6 +1,6 @@
 # 后端接口与工程保存
 
-后端把编辑引擎的工程能力封装为 HTTP 接口：创建、读取、保存、删除工程。工程以 `.ljproject` JSON 文件保存在服务器的 `workspace/projects/` 目录中，桌面版可以直接打开这些文件。
+后端把编辑引擎的工程能力封装为 HTTP 接口：创建、读取、保存、删除工程。工程以 `.ljproject` JSON 文件保存在服务器的 `workspace/projects/` 目录中，桌面版可以直接打开这些文件。成员 4 的 AI 方案生成、应用和撤销已接到同一个工程存储，详见 [AI 工作流接入说明](ai_workflow_integration.md)。
 
 ## 启动
 
@@ -16,7 +16,10 @@ python -m backend
 | `LINGJIAN_HOST` | `127.0.0.1` | 监听地址 |
 | `LINGJIAN_PORT` | `8000` | 监听端口 |
 | `LINGJIAN_WORKSPACE` | `./workspace` | 工程文件根目录，首次启动自动创建 |
-| `LINGJIAN_CORS_ORIGINS` | `*` | 允许的前端来源，逗号分隔 |
+| `LINGJIAN_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许的前端来源，逗号分隔；不支持 `*` |
+| `LINGJIAN_FFMPEG` | 自动查找 | AI 分析所需 FFmpeg 路径；找不到时工程接口仍可用 |
+
+当前是本机单用户开发服务，工程接口尚无账号/工程归属隔离；请保持本机监听。AI 接口同时要求客户端 IP 和 Host 为本机地址。未获允许的浏览器 Origin 返回 403，同源 `/docs` 可正常访问。多用户部署需要另行接入会话认证和访问权限。
 
 ## 接口
 
@@ -24,12 +27,14 @@ python -m backend
 
 | 方法 | 路径 | 请求体 | 成功 | 失败 |
 | --- | --- | --- | --- | --- |
-| GET | `/health` | – | `{status, version, workspace}` | – |
+| GET | `/health` | – | `{status, version, workspace, ai}` | – |
 | GET | `/projects` | – | 工程摘要列表 | – |
 | POST | `/projects` | `{title?, ratio?, project?}` | 201 工程记录 | 422 |
 | GET | `/projects/{id}` | – | 200 工程记录 | 400 / 404 / 500 |
 | PUT | `/projects/{id}` | `{revision, project}` | 200 工程记录（新 revision） | 400 / 404 / 409 / 422 |
 | DELETE | `/projects/{id}` | – | 204 | 400 / 404 |
+
+AI 接口使用同一个 `/api/v1` 前缀，包括 `/ai/capabilities`、`/projects/{id}/ai/sources` 和 `/projects/{id}/ai/plans`；详细请求、轮询与确认流程见 [AI 接口表](ai_workflow_integration.md#成员-3浏览器接口)。
 
 **工程记录**（`GET` / `POST` / `PUT` 的响应）：
 
@@ -89,7 +94,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects -H 'Content-Type: application
 
 ## 异常保存不损坏旧文件
 
-- 写入先落到同目录临时文件，`fsync` 后用 `os.replace` 原子替换，任何时刻主文件要么是完整旧版、要么是完整新版，中途崩溃只会留下旧版。
+- 写入先落到同目录临时文件，`fsync` 后用 `os.replace` 原子替换，主文件为完整旧版或完整新版；失败发生在替换之后时，重新读取会看到已经提交的新版。
 - 每次成功保存前，上一版复制为 `<id>.ljproject.bak`。
 - 如果主文件损坏（例如磁盘异常），`GET` 会自动返回备份并把 `recovered_from_backup` 置为 `true`。恢复出来的内容按**新版本**计（revision 比损坏前大），持有损坏前 revision 的客户端保存会得到 409，需要重新读取；之后的保存不会用损坏的文件覆盖这份备份。
 - 桌面版 `Project.save()` 也改用同一套原子写。
@@ -98,7 +103,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects -H 'Content-Type: application
 
 revision、时间戳和工程内容的指纹保存在 `<id>.meta.json` 中，而不只在 `.ljproject` 的信封字段里。桌面版打开 `workspace/projects/<id>.ljproject` 并原地另存时会去掉信封字段，后端读取时发现内容指纹与上次写入不一致，就把它当作一个**更新的 revision**（+1）：持有旧 revision 的网页端保存会得到 409，不会覆盖桌面端的改动；`created_at` 也不会被重置。
 
-局限：连续两次外部改写之间如果没有经过后端读取，后端无法把它们区分开。
+局限：两次外部改写之间若没有经过后端保存，可能读到相同 revision；单纯读取不会更新元数据。AI 应用/撤销额外在保存锁内比较工程内容标识，拒绝覆盖这类后续改动；普通工程 PUT 目前仍只比较 revision。工程文件已写入而元数据写入失败时，以工程信封中的较新 revision 为准，包括撤销恢复成旧内容的情况。
 
 ## 输入校验
 
@@ -122,13 +127,14 @@ revision、时间戳和工程内容的指纹保存在 `<id>.meta.json` 中，而
 ## 访问边界
 
 - 工程 `id` 由服务器生成（32 位小写十六进制），请求中的 `id` 必须完全匹配该格式，否则返回 **400** `invalid_project_id`；`../`、绝对路径、大小写变体都会被拒绝，请求永远不会触及 `workspace/projects/` 之外的文件。
-- 片段中的素材 `path` 只作为字符串保存，服务器不读取它，也不检查它是否存在。
+- 工程 CRUD 中的素材 `path` 只作为字符串保存，不读取媒体；AI 素材接口只解析当前工程引用且实际位于 `workspace/media/` 中的视频，拒绝目录外路径和越界软链接。
 
 ## 错误码
 
 | HTTP | `detail.code` | 含义 |
 | --- | --- | --- |
 | 400 | `invalid_project_id` | 工程 ID 格式不正确 |
+| 403 | `origin_not_allowed` / `local_only` | 网页来源未配置，或 AI 请求并非来自本机 |
 | 404 | `project_not_found` | 工程不存在 |
 | 409 | `revision_conflict` | revision 已过期，`detail.current` 为服务器当前记录 |
 | 422 | `invalid_request` | 请求信封格式错误（缺少 `revision` 等），`detail.errors` 列出字段 |
@@ -226,13 +232,14 @@ revision、时间戳和工程内容的指纹保存在 `<id>.meta.json` 中，而
 
 ```
 workspace/
+├── media/                   # 当前 AI 适配器允许读取的素材根目录
 └── projects/
     ├── <id>.ljproject        # 当前版本：信封字段 + version 5 工程内容
     ├── <id>.ljproject.bak    # 上一次保存前的版本
-    └── <id>.meta.json        # revision、时间戳、内容指纹（并发控制的权威来源）
+    └── <id>.meta.json        # revision、时间戳、内容指纹
 ```
 
-`.ljproject` 顶层多出 `id`、`revision`、`created_at`、`updated_at` 四个字段，桌面版打开时会忽略它们；它们只是 `.meta.json` 的副本，方便人工查看。
+`.ljproject` 顶层多出 `id`、`revision`、`created_at`、`updated_at` 四个字段，桌面版打开时会忽略它们。后端结合元数据、正文指纹及信封中的较新 revision 处理外部改写和中途写入失败。
 
 ## 测试
 
@@ -241,3 +248,5 @@ python tests/run_regression_tests.py
 ```
 
 `tests/test_project_store.py` 覆盖校验、乐观锁、原子写、备份恢复、ID 边界、并发与桌面版兼容；`tests/test_backend_api.py` 覆盖 HTTP 状态码、错误体、CORS 与重启后读取，未安装 fastapi 时自动跳过。
+
+AI 与真实存储的整合检查：安装后端依赖、`httpx` 和 FFmpeg 后运行 `python -m unittest tests.test_backend_ai_integration -v`。完整测试命令见 [AI 验证说明](ai_workflow_integration.md#运行边界与验证)。

@@ -94,12 +94,14 @@ def create_app(store: ProjectStore | None = None, *, ffmpeg: str | None = None) 
 
     @asynccontextmanager
     async def lifespan(app):
-        yield
-        workflow.close()
+        try:
+            yield
+        finally:
+            workflow.close()
 
     app = FastAPI(
         title="灵剪 AI 后端", version=APP_VERSION,
-        description="工程的创建、读取、保存与删除。保存使用乐观锁：读取时拿到 revision，保存时带回，过期返回 409。",
+        description="工程保存与 AI 方案预览、应用、撤销。保存时带回 revision，过期返回 409；AI 接口目前仅供本机访问。",
         lifespan=lifespan,
     )
     app.state.store = store

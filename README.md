@@ -39,16 +39,18 @@ The application uses PySide6 for its interface, NumPy and Pillow for image proce
 
 ### Run the backend API
 
-The HTTP API stores projects as `.ljproject` files under `workspace/` and serves interactive documentation at `/docs`:
+The HTTP API stores projects as `.ljproject` files under `workspace/` and mounts AI planning, explicit application, and undo at the same `/api/v1` prefix. Interactive documentation is available at `http://127.0.0.1:8000/docs`:
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-backend.txt
-.\.venv\Scripts\python.exe -m backend
+```sh
+python -m pip install -r requirements-backend.txt
+python -m backend
 ```
 
-See the [backend API guide](docs/backend_api.md) for the endpoints, the project data structure, and revision-based conflict handling.
+Run these commands with Python 3.11+ in your activated environment. The backend alone does not require the desktop Qt/ONNX dependencies. This is a local single-user development service; browser UI and media upload/playback still need their team integrations. AI sources currently come from project references inside `workspace/media/`. Set `LINGJIAN_FFMPEG`, install FFmpeg on PATH, or install the optional `imageio-ffmpeg` package to enable analysis.
 
-For media processing, LingJian first looks for `ffmpeg.exe` beside `video_editor_app.py`, then looks for `ffmpeg` on `PATH`. The local distribution includes the Windows executable. Keep the `assets/` and `models/` folders at the project root so the application can find its resources.
+See the [backend API guide](docs/backend_api.md) for project data and conflict handling, and the [integrated AI workflow guide](docs/ai_workflow_integration.md) for source IDs, preview/apply/undo, cloud configuration, and frontend integration.
+
+For desktop media processing, LingJian first looks for `ffmpeg.exe` beside `video_editor_app.py`, then looks for `ffmpeg` on `PATH`. The local distribution includes the Windows executable. Keep the `assets/` and `models/` folders at the project root so the application can find its resources.
 
 ## Make your first video
 
@@ -94,6 +96,8 @@ Model files, installers, and generated videos are excluded by `.gitignore`, so a
 ├── multitrack_timeline.py     # Media list and interactive timeline widgets
 ├── video_editing_engine.py    # Project data, media analysis, editing, and rendering
 ├── ai_story_planner.py        # Cloud requests, narrative planning, and continuity
+├── ai_workflow.py             # Background AI proposals, confirmation and undo
+├── ai_workflow_api.py         # AI request/response routes
 ├── edit_plan.py               # Edit-plan construction, validation, and application
 ├── creative_treatment.py      # Whole-video caption, motion, sound, and music choices
 ├── editing_preferences.py     # Preferences learned from user-edited timelines
@@ -102,7 +106,8 @@ Model files, installers, and generated videos are excluded by `.gitignore`, so a
 ├── builtin_sound_effects.py   # Bundled sound-effect metadata and generation
 ├── backend/
 │   ├── project_store.py       # Project validation, atomic saves, revisions, id boundary
-│   └── api.py                 # FastAPI routes over the project store
+│   ├── ai_adapter.py          # Persist AI changes and resolve workspace media
+│   └── api.py                 # Unified project and AI FastAPI application
 ├── assets/
 │   ├── fonts/                 # Bundled fonts and their licenses
 │   ├── music/                 # Generated music loops
@@ -147,6 +152,7 @@ These generate test media and render actual output files. The portable suite doe
 - [Download and checksum](docs/download_guide.md)
 - [Cloud API configuration](docs/cloud_ai_setup.md)
 - [Backend API and project persistence](docs/backend_api.md)
+- [Integrated AI workflow and frontend contract](docs/ai_workflow_integration.md)
 - [Release notes](docs/release_notes.md)
 - [Creative-treatment design](docs/creative_treatment_design.md)
 - [Third-party components and licenses](docs/third_party_notices.md)

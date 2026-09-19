@@ -125,12 +125,22 @@ class ProjectStoreAIBackend:
     def commit_project(self, project_id: str, owner_id: str, project: Project,
                        expected_revision: int, *, expected_token: str | None = None) -> ProjectSnapshot:
         self._record(project_id, owner_id)
+        payload = project.to_dict()
         try:
-            saved = self.store.save(project_id, project.to_dict(), expected_revision, expected_token=expected_token)
+            saved = self.store.save(project_id, payload, expected_revision, expected_token=expected_token)
         except StoreConflict:
             raise RevisionConflict() from None
         except ProjectStoreError as exc:
             raise WorkflowError(exc.code, '工程保存失败，请检查数据后重试。', exc.status) from None
         except OSError:
-            raise WorkflowError('save_failed', '工程未保存成功，请检查磁盘空间后重试。', 503) from None
+            # The body may have committed before the separate metadata write
+            # failed. Confirm that exact transaction so apply/undo state agrees
+            # with disk and we do not offer an unsafe duplicate application.
+            try:
+                saved = self.store.get(project_id)
+            except (ProjectStoreError, OSError):
+                saved = None
+            if (saved is None or saved.recovered_from_backup or saved.project != payload
+                    or saved.revision != expected_revision + 1):
+                raise WorkflowError('save_failed', '暂时无法确认保存结果，请刷新工程并检查磁盘空间。', 503) from None
         return ProjectSnapshot(Project.from_dict(saved.project), saved.revision, project_version_token(saved))

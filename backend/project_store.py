@@ -499,14 +499,20 @@ class ProjectStore:
     def _record(self, project_id: str, raw: dict, project: dict, meta: dict | None, path: Path, recovered: bool) -> ProjectRecord:
         if meta is not None:
             created = meta.get("created_at") if isinstance(meta.get("created_at"), str) else _mtime_iso(path)
+            envelope = raw.get("revision")
+            envelope = envelope if isinstance(envelope, int) and not isinstance(envelope, bool) else 0
             if meta["fingerprint"] == _fingerprint(project):
-                updated = meta.get("updated_at") if isinstance(meta.get("updated_at"), str) else created
-                return ProjectRecord(project_id, meta["revision"], created, updated, project, recovered)
+                # An undo or no-op save can restore the metadata's exact body
+                # while its metadata write fails. The committed envelope must
+                # still advance the revision instead of reviving an old one.
+                revision = max(meta["revision"], envelope)
+                updated = (meta.get("updated_at") if isinstance(meta.get("updated_at"), str) else created)
+                if revision > meta["revision"]:
+                    updated = _mtime_iso(path)
+                return ProjectRecord(project_id, revision, created, updated, project, recovered)
             # The body differs from the store's last write (desktop save, hand edit, backup recovery, or a crash
             # between the two writes): count it as a newer revision so clients holding the old one conflict
             # instead of silently winning. The envelope revision covers the crash case where it ran ahead.
-            envelope = raw.get("revision")
-            envelope = envelope if isinstance(envelope, int) and not isinstance(envelope, bool) else 0
             return ProjectRecord(project_id, max(meta["revision"] + 1, envelope), created, _mtime_iso(path), project, recovered)
         # No metadata: a legacy or foreign file; trust its envelope if it has one.
         revision = raw.get("revision")

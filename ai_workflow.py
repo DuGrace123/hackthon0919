@@ -60,6 +60,8 @@ class WorkflowBackend(Protocol):
     Missing/unauthorized IDs must raise WorkflowError(..., status=404).
     commit_project must compare revision AND save atomically, raising
     RevisionConflict on mismatch. Its revision must increase on every save.
+    When get_project returns a version_token, commit_project must also compare
+    expected_token inside that transaction to detect repeated external writes.
     """
     def get_project(self, project_id: str, owner_id: str) -> ProjectSnapshot: ...
     def resolve_media(self, project_id: str, media_id: str, owner_id: str) -> MediaSource: ...
