@@ -6,6 +6,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from unittest.mock import patch
 
@@ -127,6 +128,53 @@ class WebEditingWorkflowTests(unittest.TestCase):
         response = self.client.post("/api/export", headers={"X-CSRF-Token": self.csrf})
         self.assertEqual(response.status_code, 400)
         self.assertIn("时间线为空", response.get_json()["error"])
+
+    def test_failed_batch_keeps_existing_media_without_partial_imports(self):
+        original = self.upload("existing.mp4")
+        before = self.client.get("/api/project").get_json()["media"]
+        response = self.client.post(
+            "/api/media/upload",
+            data={"files": [(io.BytesIO(b"video"), "valid.mp4"), (io.BytesIO(b"text"), "invalid.txt")]},
+            headers={"X-CSRF-Token": self.csrf},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.client.get("/api/project").get_json()["media"], before)
+        workspace = Path(self.temp.name)
+        self.assertEqual([p.name for p in (workspace / "uploads").iterdir()], [original["stored_name"]])
+        self.assertEqual(set(json.loads((workspace / "media_catalog.json").read_text())), {original["id"]})
+
+    def test_catalog_write_failure_rolls_back_new_files_and_memory(self):
+        original = self.upload("existing.mp4")
+        with patch("web_app._atomic_json", side_effect=OSError("disk full")):
+            response = self.client.post(
+                "/api/media/upload", data={"files": (io.BytesIO(b"video"), "new.mp4")},
+                headers={"X-CSRF-Token": self.csrf},
+            )
+        self.assertEqual(response.status_code, 500)
+        media = self.client.get("/api/project").get_json()["media"]
+        self.assertEqual([item["id"] for item in media], [original["id"]])
+        self.assertEqual(len(list((Path(self.temp.name) / "uploads").iterdir())), 1)
+
+    def test_audio_uses_audio_probe_and_cannot_create_unrenderable_video_clip(self):
+        with patch("web_app.resolve_ffmpeg", return_value="test-ffmpeg"):
+            app = create_app(self.temp.name)
+        self.addCleanup(app.ai_workflow.close)
+        client = app.test_client()
+        token = client.get("/api/auth/status").get_json()["csrf_token"]
+        login = client.post("/api/auth/login", json={"username": "test-admin", "password": "testing-pass-123"}, headers={"X-CSRF-Token": token})
+        token = login.get_json()["csrf_token"]
+        metadata = {"duration": 3, "has_audio": True, "width": 0, "height": 0}
+        with patch("web_app.probe_media", return_value=metadata) as probe:
+            response = client.post("/api/media/upload", data={"files": (io.BytesIO(b"audio"), "sound.wav")}, headers={"X-CSRF-Token": token})
+        self.assertEqual(response.status_code, 201, response.get_json())
+        self.assertFalse(probe.call_args.kwargs["require_video"])
+        media = response.get_json()["media"][0]
+        preview = client.get(media["url"])
+        self.assertEqual(preview.data, b"audio")
+        preview.close()
+        rejected = client.post("/api/timeline/clips", json={"media_id": media["id"]}, headers={"X-CSRF-Token": token})
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(client.get("/api/project").get_json()["project"]["clips"], [])
 
 
 class AccountManagementTests(unittest.TestCase):
