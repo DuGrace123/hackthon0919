@@ -94,6 +94,26 @@ class WebEditingWorkflowTests(unittest.TestCase):
         self.assertTrue(project_file.exists())
         self.assertEqual(json.loads(project_file.read_text(encoding="utf-8"))["title"], "Hackathon Demo")
 
+    def test_media_can_be_deleted_unless_it_is_on_the_timeline(self):
+        media = self.upload()
+        other = self.upload("camera-two.mp4")
+        clip = self.add_clip(media["id"])
+        blocked = self.client.delete(f"/api/media/{media['id']}", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(blocked.status_code, 409, blocked.get_json())
+        self.assertEqual(blocked.get_json()["code"], "media_in_use")
+        self.assertTrue(Path(media["path"]).exists())
+        removed = self.client.delete(f"/api/media/{other['id']}", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(removed.status_code, 200, removed.get_json())
+        self.assertEqual([item["id"] for item in removed.get_json()["media"]], [media["id"]])
+        self.assertFalse(Path(other["path"]).exists())
+        self.assertEqual(self.client.get("/api/project").get_json()["project"]["clips"][0]["id"], clip["id"])
+        self.client.delete(f"/api/timeline/clips/{clip['id']}", headers={"X-CSRF-Token": self.csrf})
+        freed = self.client.delete(f"/api/media/{media['id']}", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(freed.status_code, 200, freed.get_json())
+        self.assertEqual(self.client.get("/api/project").get_json()["media"], [])
+        missing = self.client.delete(f"/api/media/{media['id']}", headers={"X-CSRF-Token": self.csrf})
+        self.assertEqual(missing.status_code, 400)
+
     def test_invalid_trim_is_rejected_without_corrupting_clip(self):
         media = self.upload()
         clip = self.add_clip(media["id"])
@@ -328,6 +348,7 @@ class AIDirectorTests(unittest.TestCase):
         self.assertFalse(capabilities["cloud_available"])
         sources = self.client.get("/api/ai/sources").get_json()
         self.assertEqual([item["id"] for item in sources["items"]], [video["id"]])
+        self.assertIn("capture_time", sources["items"][0])
         self.assertEqual(sources["revision"], self.project()["revision"])
 
     def test_local_plan_preview_apply_persist_and_undo(self):
@@ -369,6 +390,41 @@ class AIDirectorTests(unittest.TestCase):
         self.assertEqual(undone.get_json()["plan"]["status"], "undone")
         self.assertEqual([clip["id"] for clip in undone.get_json()["project"]["clips"]], [manual["id"]])
         self.assertEqual([clip["id"] for clip in self.project_file()["clips"]], [manual["id"]])
+
+    def test_opening_and_style_options_reach_the_report(self):
+        media = self.upload()
+        started = self.create_plan(media, opening="chronological", style="纪录片 · 尊重事件顺序与完整语义")
+        self.assertEqual(started.status_code, 202, started.get_json())
+        plan = self.wait(started.get_json()["id"])
+        self.assertEqual(plan["status"], "ready", plan)
+        self.assertEqual(plan["result"]["shots"][0]["role"], "setup")
+        report = plan["result"]["report"]
+        self.assertEqual(report["opening"], "chronological")
+        self.assertTrue(any("纪录片" in line for line in report["techniques"]))
+        self.assertIn("故事线", report["report_text"])
+        invalid = self.create_plan(media, opening="sideways")
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(invalid.get_json()["code"], "invalid_opening")
+
+    def test_opening_preset_can_be_switched_and_applied_with_layers(self):
+        media = self.upload()
+        plan = self.wait(self.create_plan(media).get_json()["id"])
+        self.assertTrue(plan["result"]["validation"]["ok"])
+        self.assertTrue(plan["result"]["opening_presets"])
+        switched = self.client.post(f"/api/ai/plans/{plan['id']}/opening", json={"preset": "tear_flash"}, headers=self.headers)
+        self.assertEqual(switched.status_code, 200, switched.get_json())
+        self.assertEqual(switched.get_json()["result"]["creative"]["preset_id"], "tear_flash")
+        applied = self.client.post(
+            f"/api/ai/plans/{plan['id']}/apply", json={"revision": self.project()["revision"], "confirm": True}, headers=self.headers
+        )
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        project = applied.get_json()["project"]
+        self.assertEqual(project["overlay_count"], switched.get_json()["result"]["changes"]["add_overlays"])
+        self.assertEqual(project["sfx_count"], switched.get_json()["result"]["changes"]["add_sound_effects"])
+        self.assertTrue(project["bgm_name"])
+        on_disk = self.project_file()
+        self.assertEqual(len(on_disk["overlays"]), project["overlay_count"])
+        self.assertEqual(on_disk["edit_log"][-1]["opening"], "tear_flash")
 
     def test_manual_edit_after_plan_generation_blocks_apply(self):
         media = self.upload()
@@ -498,6 +554,8 @@ class AIServiceSettingsTests(unittest.TestCase):
         self.env.start()
         self.tester_calls = []
         self.tester_result = ["gpt-5-mini", "gpt-4o-mini-transcribe", "other-model"]
+        self.transcription_calls = []
+        self.transcription_result = None
         self.app = self.make_app()
         self.client = self.app.test_client()
         status = self.client.get("/api/auth/status").get_json()
@@ -519,9 +577,14 @@ class AIServiceSettingsTests(unittest.TestCase):
             raise self.tester_result
         return self.tester_result
 
+    def fake_transcription(self, config):
+        self.transcription_calls.append(config)
+        if isinstance(self.transcription_result, Exception):
+            raise self.transcription_result
+
     def make_app(self):
         app = create_app(self.temp.name, probe_fn=fake_probe, export_runner=fake_export, ai_analyzer=fake_analyzer,
-                         cloud_tester=self.fake_tester)
+                         cloud_tester=self.fake_tester, transcription_tester=self.fake_transcription)
         app.config.update(TESTING=True)
         self.addCleanup(app.ai_workflow.close)
         return app
@@ -601,8 +664,20 @@ class AIServiceSettingsTests(unittest.TestCase):
         self.assertTrue(result["model_found"])
         self.assertTrue(result["transcription_model_found"])
         self.assertEqual(result["model_count"], 3)
+        self.assertTrue(result["transcription_ok"])
         self.assertEqual(self.tester_calls[-1].api_key, self.KEY)
         self.assertEqual(self.tester_calls[-1].base_url, "https://ai.example.test/v1")
+        self.assertEqual(self.transcription_calls[-1].transcription_model, "gpt-4o-mini-transcribe")
+
+        # A chat model in the transcription slot exists in the model list but cannot transcribe.
+        self.transcription_result = AIRequestError("AI 服务请求失败（HTTP 431）。", "provider_http_error")
+        result = self.client.post("/api/admin/ai-config/test", json={**body, "transcription_model": "gpt-5-mini"}, headers=self.headers).get_json()
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["transcription_model_found"])
+        self.assertFalse(result["transcription_ok"])
+        self.assertIn("HTTP 431", result["transcription_error"])
+        self.assertIn("gpt-4o-mini-transcribe", result["transcription_error"])
+        self.transcription_result = None
 
         self.tester_result = ["something-else"]
         result = self.client.post("/api/admin/ai-config/test", json=body, headers=self.headers).get_json()

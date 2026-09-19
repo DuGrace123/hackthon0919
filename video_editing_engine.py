@@ -245,15 +245,25 @@ def _font_path(name,text=''):
     if re.search(r'[\u3400-\u9fff]',str(text)) and str(name) in ('Arial','Impact','Consolas'):name='微软雅黑'
     return 'C\\:/Windows/Fonts/'+fonts.get(str(name),fonts['微软雅黑'])
 
-def wrap_caption(text,max_chars=16):
+def wrap_caption(text,max_chars=16,max_lines=4):
+    """Wrap a caption into lines; nothing is dropped so long spoken lines stay complete.
+
+    When the text needs more than max_lines, the line width grows instead of cutting
+    words, and the renderer shrinks the font to fit.
+    """
     text=' '.join(str(text).strip().split())
     if len(text)<=max_chars:return text
-    lines=[]
-    while text:
-        cut=min(max_chars,len(text))
-        if ' ' in text[:cut+1]:cut=max(1,text.rfind(' ',0,cut+1))
-        lines.append(text[:cut].strip());text=text[cut:].strip()
-    return '\n'.join(lines[:2])
+    def split(width):
+        lines=[];rest=text
+        while rest:
+            cut=min(width,len(rest))
+            if cut<len(rest) and ' ' in rest[:cut+1]:cut=max(1,rest.rfind(' ',0,cut+1))
+            lines.append(rest[:cut].strip());rest=rest[cut:].strip()
+        return lines
+    lines=split(max_chars)
+    while len(lines)>max_lines and max_chars<len(text):
+        max_chars=max_chars+max(2,max_chars//4);lines=split(max_chars)
+    return '\n'.join(lines)
 
 def build_render_command(ffmpeg:str,project:Project,out:str,width=720,height=1280,quality='standard'):
     if not project.clips: raise ValueError('时间线为空')
@@ -323,7 +333,9 @@ def build_render_command(ffmpeg:str,project:Project,out:str,width=720,height=128
             font=_font_path('黑体',title_text);safe=escape_drawtext(title_text);fg=_hex(getattr(c,'title_color','#FFFFFF'))[1:]
             vf+=f",drawtext=fontfile='{font}':text='{safe}':fontcolor=0x{fg}:fontsize='h*0.105*(1+0.34*exp(-4*t)*abs(sin(11*t)))':borderw=4:bordercolor=black@0.65:box=1:boxcolor=0x111827@0.34:boxborderw=20:x=(w-text_w)/2:y=(h-text_h)/2"
         if c.caption:
-            y={'top':'h*0.10','center':'(h-text_h)/2','lower_third':'h*0.72','bottom':'h*0.86'}.get(c.position,'h*0.86');size=max(18,min(210,round(int(getattr(c,'caption_size',42))*width/720)));fg=_hex(getattr(c,'caption_color','#FFFFFF'))[1:];bg=_hex(getattr(c,'caption_bg','#000000'),'#000000')[1:];alpha=max(0,min(1,float(getattr(c,'caption_bg_opacity',.55))))
+            wrapped=wrap_caption(c.caption,max(10,round(width/45)));line_count=wrapped.count('\n')+1;shrink=1. if line_count<=2 else (.82 if line_count==3 else .7)
+            # Multi-line captions anchor their bottom edge instead of their top so extra lines grow upwards and stay on screen.
+            y={'top':'h*0.10','center':'(h-text_h)/2','lower_third':'h*0.72' if line_count==1 else 'h*0.80-text_h','bottom':'h*0.86' if line_count==1 else 'h*0.94-text_h'}.get(c.position,'h*0.86');size=max(18,min(210,round(int(getattr(c,'caption_size',42))*width/720*shrink)));fg=_hex(getattr(c,'caption_color','#FFFFFF'))[1:];bg=_hex(getattr(c,'caption_bg','#000000'),'#000000')[1:];alpha=max(0,min(1,float(getattr(c,'caption_bg_opacity',.55))))
             effect=str(getattr(c,'caption_effect','clean') or 'clean');font_size=str(size);x='(w-text_w)/2';border=2;box=1
             if effect in ('jelly','pop'):font_size=f"{size}*(1+0.24*exp(-5*t)*abs(sin(12*t)))";border=4
             elif effect=='typewriter':x="(w-text_w)/2-2*sin(23*t)";box=0
@@ -331,7 +343,7 @@ def build_render_command(ffmpeg:str,project:Project,out:str,width=720,height=128
             elif effect=='kinetic':x="(w-text_w)/2+12*sin(6*t)";border=3
             elif effect=='minimal':box=0
             elif effect=='highlight':border=4
-            vf+=f",drawtext=fontfile='{_font_path(getattr(c,'caption_font','微软雅黑'),c.caption)}':text='{escape_drawtext(wrap_caption(c.caption,max(10,round(width/45))))}':fontcolor=0x{fg}:fontsize='{font_size}':borderw={border}:bordercolor=black@0.85:box={box}:boxcolor=0x{bg}@{alpha:.2f}:boxborderw=14:line_spacing=8:x='{x}':y={y}"
+            vf+=f",drawtext=fontfile='{_font_path(getattr(c,'caption_font','微软雅黑'),c.caption)}':text='{escape_drawtext(wrapped)}':fontcolor=0x{fg}:fontsize='{font_size}':borderw={border}:bordercolor=black@0.85:box={box}:boxcolor=0x{bg}@{alpha:.2f}:boxborderw=14:line_spacing=8:x='{x}':y={y}"
         filters.append(vf+f',settb=1/30,setpts=N/(30*TB),fps=30[v{i}]')
         if c.has_audio: filters.append(f'[{i}:a]aresample=48000,volume={c.volume},asetpts=PTS-STARTPTS[a{i}]')
         else: filters.append(f'anullsrc=r=48000:cl=stereo:d={c.duration:.3f}[a{i}]')

@@ -135,7 +135,13 @@ def _short_text(value, limit=400):
     if not isinstance(value,str):raise AIRequestError('AI 文本字段格式无效。','invalid_response')
     return value[:limit]
 
-def request_highlights(cfg:APIConfig,transcript:str,contact_sheet:str,duration:float,user_prompt:str)->list[dict]:
+def _model_options(cfg:APIConfig)->dict:
+    """Reasoning models (gpt-5 family, o-series) default to long deliberation; low effort keeps shot analysis within request timeouts."""
+    name=cfg.model.strip().lower()
+    if name.startswith('gpt-5') or re.match(r'^o\d',name):return {'reasoning':{'effort':'low'}}
+    return {}
+
+def request_highlights(cfg:APIConfig,transcript:str,contact_sheet:str,duration:float,user_prompt:str,*,report:dict|None=None)->list[dict]:
     image='data:image/jpeg;base64,'+base64.b64encode(Path(contact_sheet).read_bytes()).decode();item_props={'start':{'type':'number'},'end':{'type':'number'},'score':{'type':'number'},'reason':{'type':'string'},'caption':{'type':'string'},'role':{'type':'string','enum':['hook','setup','development','climax','outro','broll']},'stage':{'type':'string','enum':list(STAGE_ORDER)},'chapter':{'type':'string'},'shot_type':{'type':'string'},'motion':{'type':'number'},'stability':{'type':'number'},'audio_value':{'type':'number'},'visual_signature':{'type':'string'}};schema={'type':'object','properties':{'summary':{'type':'string'},'segments':{'type':'array','items':{'type':'object','properties':item_props,'required':list(item_props),'additionalProperties':False}}},'required':['summary','segments'],'additionalProperties':False}
     frame_count=36;interval=max(.5,duration/frame_count);frame_map=', '.join(f'{i+1}≈{min(duration,(i+.5)*interval):.1f}s' for i in range(frame_count))
     prompt=f'''你是专业纪录片与短视频剪辑师。接触表按从左到右、从上到下排列，帧时间约为：{frame_map}。分析画面与语音，从 {duration:.2f} 秒素材中找出可独立剪辑的候选镜头。
@@ -143,8 +149,9 @@ def request_highlights(cfg:APIConfig,transcript:str,contact_sheet:str,duration:f
 stage必须判断事件阶段：intro开场、ingredients食材/对象展示、prep切洗准备、cook烹饪/执行、plate装盘/结果展示、taste试吃/验收、outro收尾、other其他。chapter写明当前事件章节。对于教程、做饭、改造、开箱等步骤型素材，成品画面可作为开头钩子，但其余步骤的stage必须按真实事件判断，不能因画面更精彩而改变阶段。
 候选镜头必须至少贡献一种价值：新事实、新动作状态、新地点、新情绪或因果转折。只有重复动作、口头填充词、离场等待、镜头尚未摆稳的片段即使清晰也要降分。优先保留目标陈述、困难/意外、关键变化、人物反应、结果验证；动作过程应选“开始—关键变化—结果”，不要把同一动作切成多段反复返回。
 用户要求：{user_prompt}\n语音转写：{transcript or '无可用语音'}\n画面超过60秒时必须覆盖开头、中段、后段和收尾的全部事件章节，不能只挑前半段；为120秒成片准备足够数量且时间分布均匀的候选。只返回可进入非线性时间线的候选，不要在单素材内决定最终顺序。'''
-    body={'model':cfg.model,'store':False,'input':[{'role':'user','content':[{'type':'input_text','text':prompt},{'type':'input_image','image_url':image}]}],'text':{'format':{'type':'json_schema','name':'video_highlights','strict':True,'schema':schema}}}
+    body={'model':cfg.model,'store':False,**_model_options(cfg),'input':[{'role':'user','content':[{'type':'input_text','text':prompt},{'type':'input_image','image_url':image}]}],'text':{'format':{'type':'json_schema','name':'video_highlights','strict':True,'schema':schema}}}
     result=_request(cfg.endpoint('responses'),json.dumps(body).encode(),{'Authorization':'Bearer '+cfg.api_key,'Content-Type':'application/json'},cfg.timeout);text=_output_text(result).strip();text=re.sub(r'^```(?:json)?|```$','',text).strip();data=_json_object(text);valid=[]
+    if report is not None:report['summary']=_short_text(data.get('summary',''),600);report['transcript']=_short_text(transcript,600)
     segments=data.get('segments')
     if not isinstance(segments,list) or len(segments)>300:raise AIRequestError('AI 候选镜头格式无效。','invalid_response')
     for s in segments:
@@ -205,14 +212,16 @@ def extract_assets(ffmpeg:str,source:str,folder:str,duration:float,*,timeout=180
     return str(audio),str(sheet)
 
 
-def analyze_video(ffmpeg:str,cfg:APIConfig,source:str,duration:float,folder:str,prompt:str,*,checkpoint=None,has_audio=None):
+def analyze_video(ffmpeg:str,cfg:APIConfig,source:str,duration:float,folder:str,prompt:str,*,checkpoint=None,has_audio=None,report:dict|None=None):
     if not cfg.api_key:raise AIRequestError('请先配置服务端 AI 密钥。','authentication_failed')
     check=checkpoint or (lambda:None)
     audio,sheet=extract_assets(ffmpeg,source,folder,duration,timeout=cfg.timeout,checkpoint=check,has_audio=has_audio)
     check()
-    transcript=transcribe_audio(cfg,audio) if Path(audio).exists() and Path(audio).stat().st_size>1000 else ''
+    try:transcript=transcribe_audio(cfg,audio) if Path(audio).exists() and Path(audio).stat().st_size>1000 else ''
+    except AIRequestError as e:raise AIRequestError(f'语音转写失败（转写模型 {cfg.transcription_model}）：{e}',e.code,e.retryable) from None
     check()
-    result=request_highlights(cfg,transcript,sheet,duration,prompt)
+    try:result=request_highlights(cfg,transcript,sheet,duration,prompt,report=report)
+    except AIRequestError as e:raise AIRequestError(f'画面分析失败（视觉模型 {cfg.model}）：{e}',e.code,e.retryable) from None
     check()
     return result
 
@@ -366,7 +375,14 @@ def local_sequence(analyses:list[dict],target:float,user_prompt:str='')->list[di
     if not chosen:return []
     return enforce_continuity(chosen,analyses,user_prompt,target)
 
-def plan_sequence(cfg:APIConfig,analyses:list[dict],target:float,user_prompt:str,*,allow_fallback:bool=True)->list[dict]:
+def chronological_sequence(sequence:list[dict],analyses:list[dict])->list[dict]:
+    """No cold open: every shot in capture order, roles reassigned to setup/development/outro."""
+    ordered=[dict(s) for s in sorted(sequence,key=lambda s:_source_key(s,analyses))]
+    for i,s in enumerate(ordered):
+        s['role']='setup' if i==0 else ('outro' if i==len(ordered)-1 else 'development')
+    return ordered
+
+def plan_sequence(cfg:APIConfig,analyses:list[dict],target:float,user_prompt:str,*,allow_fallback:bool=True,report:dict|None=None)->list[dict]:
     candidates=[]
     for source_index,item in enumerate(analyses):
         for candidate_index,s in enumerate(item.get('segments',[])):
@@ -379,9 +395,10 @@ def plan_sequence(cfg:APIConfig,analyses:list[dict],target:float,user_prompt:str
     prompt=f'''你是总剪辑师。请从候选镜头中设计约{target:.1f}秒的最终顺序。用户要求：{user_prompt}\n{long_rule}\n建议节拍表：{blueprint}
 遵守：1) 前1-3秒最多一个hook；2) hook之后形成setup→development→climax→outro，最终输出必须能独立看懂，不能只是精彩镜头堆叠；3) 步骤型内容必须严格按intro→ingredients→prep→cook→plate→taste→outro单向推进，成品/试吃可在hook预览一次，但正片绝不允许从taste/plate/cook退回prep；4) 旅行与事件记录的正片按真实拍摄时间推进，口播回场只能作为当前章节的解说锚点；5) 相邻镜头必须带来新事实、新动作状态、新地点或新情绪，同时尽量变化景别；6) 去除重叠、重复构图、天花板、误触、等待和口头填充；7) 动作过程按开始—关键变化—结果组织，不拆散后反复返回；8) 尽量在动作/语句边界切，通常每镜头1.2-5.5秒；9) 总时长尽量接近目标但不可超过；10) 只能使用给定id及其时间范围；11) caption只写该镜头真实语音或必要的简短章节标题，不编造对白；12) 动作连续用cut，普通段落变化用fade/dissolve，只有节奏明显或空间变化时才少量使用wipe/slide/circle/smooth，禁止每个切点都用花哨转场；13) 情绪曲线应从好奇/目标逐步提高到困难或变化，在结果/反应处释放，并用最后一句或最后一个动作回收开场。
 候选：{compact}'''
-    body={'model':cfg.model,'store':False,'input':[{'role':'user','content':[{'type':'input_text','text':prompt}]}],'text':{'format':{'type':'json_schema','name':'edit_decision_list','strict':True,'schema':schema}}}
+    body={'model':cfg.model,'store':False,**_model_options(cfg),'input':[{'role':'user','content':[{'type':'input_text','text':prompt}]}],'text':{'format':{'type':'json_schema','name':'edit_decision_list','strict':True,'schema':schema}}}
     try:
         result=_request(cfg.endpoint('responses'),json.dumps(body).encode(),{'Authorization':'Bearer '+cfg.api_key,'Content-Type':'application/json'},cfg.timeout);data=_json_object(re.sub(r'^```(?:json)?|```$','',_output_text(result).strip()).strip());by_id={c['id']:c for c in candidates};out=[];used=0.0
+        if report is not None:report['strategy']=_short_text(data.get('strategy',''),1200)
         proposed=data.get('sequence')
         if not isinstance(proposed,list) or len(proposed)>300:raise AIRequestError('AI 剪辑顺序格式无效。','invalid_response')
         for planned in proposed:

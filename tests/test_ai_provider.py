@@ -76,14 +76,38 @@ class ProviderTests(unittest.TestCase):
             image = Path(folder) / 'sheet.jpg'
             image.write_bytes(b'fixture')
             with patch('ai_story_planner._request', return_value={'output_text': json.dumps({'segments': [segment]})}) as request:
-                result = request_highlights(APIConfig(api_key='key'), '', str(image), 10, '旅行')
+                result = request_highlights(APIConfig(api_key='key', model='gpt-4o'), '', str(image), 10, '旅行')
                 self.assertEqual(result[0]['start'], 0)
                 payload = json.loads(request.call_args.args[1])
                 self.assertIs(payload['store'], False)
+                self.assertNotIn('reasoning', payload, 'non-reasoning models must not receive reasoning options')
+            with patch('ai_story_planner._request', return_value={'output_text': json.dumps({'segments': [segment]})}) as request:
+                request_highlights(APIConfig(api_key='key', model='gpt-5-mini'), '', str(image), 10, '旅行')
+                self.assertEqual(json.loads(request.call_args.args[1])['reasoning'], {'effort': 'low'})
             for bad in [float('nan'), float('inf'), True]:
                 with patch('ai_story_planner._request', return_value={'output_text': json.dumps({'segments': [{**segment, 'start': bad}]})}):
                     with self.assertRaises(AIRequestError):
                         request_highlights(APIConfig(), '', str(image), 10, '')
+
+    def test_story_and_summary_are_reported_when_requested(self):
+        segment = dict(start=0, end=3, score=80, reason='真实镜头', caption='', role='setup')
+        with tempfile.TemporaryDirectory() as folder:
+            image = Path(folder) / 'sheet.jpg'
+            image.write_bytes(b'fixture')
+            report = {}
+            with patch('ai_story_planner._request', return_value={'output_text': json.dumps({'summary': '两人在餐桌前吃披萨', 'segments': [segment]})}):
+                request_highlights(APIConfig(api_key='key'), '大家好', str(image), 10, '', report=report)
+            self.assertEqual(report['summary'], '两人在餐桌前吃披萨')
+            self.assertEqual(report['transcript'], '大家好')
+        analyses = [{'meta': {'name': 'footage.mp4', 'path': 'footage.mp4', 'duration': 10},
+                     'segments': [dict(start=0, end=4, score=80, caption='', reason='镜头', role='setup')]}]
+        planned = {'strategy': '先建立场景再进入吃披萨的高潮', 'sequence': [
+            {'id': 's0c0', 'start': 0, 'end': 4, 'caption': '', 'reason': '开场', 'role': 'setup', 'transition': 'cut'}]}
+        report = {}
+        with patch('ai_story_planner._request', return_value={'output_text': json.dumps(planned)}):
+            sequence = plan_sequence(APIConfig(api_key='key'), analyses, 4, '', allow_fallback=False, report=report)
+        self.assertEqual(len(sequence), 1)
+        self.assertEqual(report['strategy'], '先建立场景再进入吃披萨的高潮')
 
     def test_strict_planning_propagates_provider_error_legacy_fallback_is_preserved(self):
         analyses = [{'meta': {'name': 'footage.mp4', 'path': 'footage.mp4', 'duration': 10},

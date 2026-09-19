@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 
+from plan_i18n import plan_language, tr
+
 
 STYLE_PROFILES = {
     "旅行": {"music": "travel_breeze", "accent": "#FFE66D", "font": "站酷快乐体"},
@@ -22,17 +24,18 @@ def _profile(style: str) -> dict:
 
 def _event(item: dict) -> str:
     text = " ".join(str(item.get(k, "")) for k in ("role", "reason", "caption", "creative_purpose")).lower()
-    if item.get("role") == "outro" or any(x in text for x in ("回收", "结尾", "结束", "总结")):
+    # Keyword sets cover both plan languages so the accent map does not depend on the UI language.
+    if item.get("role") == "outro" or any(x in text for x in ("回收", "结尾", "结束", "总结", "payoff", "ending", "wrap-up", "summary", "conclusion")):
         return "resolution"
-    if item.get("role") == "climax" or any(x in text for x in ("结果", "揭示", "成品", "惊喜", "反转", "高潮")):
+    if item.get("role") == "climax" or any(x in text for x in ("结果", "揭示", "成品", "惊喜", "反转", "高潮", "result", "reveal", "finished", "surprise", "twist", "climax")):
         return "reveal"
-    if any(x in text for x in ("动作", "推进", "移动", "走", "跑", "转身", "运镜", "速度")):
+    if any(x in text for x in ("动作", "推进", "移动", "走", "跑", "转身", "运镜", "速度", "action", "move", "walk", "running", "turn", "camera move", "speed", "zoom")):
         return "motion"
-    if any(x in text for x in ("时间", "回忆", "回溯", "等待", "过去")):
+    if any(x in text for x in ("时间", "回忆", "回溯", "等待", "过去", "time", "memory", "rewind", "waiting", "past", "clock")):
         return "time"
-    if any(x in text for x in ("冲突", "障碍", "失败", "危险", "问题")):
+    if any(x in text for x in ("冲突", "障碍", "失败", "危险", "问题", "conflict", "obstacle", "fail", "danger", "problem")):
         return "conflict"
-    if any(x in text for x in ("细节", "食物", "物件", "特写", "人物")):
+    if any(x in text for x in ("细节", "食物", "物件", "特写", "人物", "detail", "food", "object", "close-up", "people", "person")):
         return "detail"
     return "chapter" if item.get("role") in ("setup", "development") else "continuity"
 
@@ -44,6 +47,7 @@ def apply_global_creative_treatment(plan: dict, story_style: str = "", density: 
     The function never reorders decisions, so the capture-order guarantee survives.
     """
     result = copy.deepcopy(plan)
+    language = plan_language(result)
     decisions = result.get("decisions") or []
     profile = _profile(story_style)
     spacing = {"subtle": 14.0, "balanced": 9.0, "energetic": 5.5}.get(density, 9.0)
@@ -69,7 +73,7 @@ def apply_global_creative_treatment(plan: dict, story_style: str = "", density: 
             sfx, motion, caption_effect = choices[event]
             volume = .50 if event in ("detail", "time", "resolution") else .62
             cues.append({"effect_id": sfx, "start": round(cursor, 3), "volume": volume,
-                         "reason": f"全片事件：{event} · 镜头 {index + 1}"})
+                         "reason": tr(language, f"全片事件：{event} · 镜头 {index + 1}", f"Whole-film event: {event} · shot {index + 1}")})
             item["motion_effect"] = motion
             item["caption_effect"] = caption_effect
             item["caption_font"] = profile["font"]
@@ -92,7 +96,7 @@ def apply_global_creative_treatment(plan: dict, story_style: str = "", density: 
     deduped = []
     for cue in cues:
         if deduped and abs(float(cue.get("start", 0)) - float(deduped[-1].get("start", 0))) < .11:
-            if str(cue.get("reason", "")).startswith("开篇"):
+            if cue.get("kind") == "opening" or str(cue.get("reason", "")).startswith("开篇"):
                 deduped[-1] = cue
             continue
         deduped.append(cue)
@@ -103,7 +107,8 @@ def apply_global_creative_treatment(plan: dict, story_style: str = "", density: 
         "music_id": profile["music"], "music_volume": .20,
         "music_ducking": True, "music_fade_in": 1.0, "music_fade_out": 2.0,
         "font": profile["font"], "accent_color": profile["accent"],
-        "rule": "章节、动作峰值、结果揭示和情绪回收才使用强强调；普通因果切点保持干净。",
+        "rule": tr(language, "章节、动作峰值、结果揭示和情绪回收才使用强强调；普通因果切点保持干净。",
+                   "Strong accents only on chapters, action peaks, reveals and emotional payoffs; ordinary cause-and-effect cuts stay clean."),
     }
     return result
 

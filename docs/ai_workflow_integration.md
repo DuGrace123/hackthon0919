@@ -11,9 +11,10 @@
 | `GET /api/ai/capabilities` | 本地/云端可用性、限制与用户提示 |
 | `GET /api/ai/sources` | 可参与 AI 剪辑的视频素材（音频文件不列出）与当前 `revision` |
 | `GET /api/ai/plans` | 当前账户未过期的方案列表（最新在前），页面刷新后据此恢复进行中、待确认或已应用的方案 |
-| `POST /api/ai/plans` | 创建分析任务（`media_ids`、`revision`、`mode`、`target_duration`、`prompt`、`cloud_consent`），返回 202 |
+| `POST /api/ai/plans` | 创建分析任务（`media_ids`、`revision`、`mode`、`target_duration`、`prompt`、`cloud_consent`、`opening`、`style`），返回 202；`media_ids` 的顺序就是素材的拍摄顺序备选 |
 | `GET /api/ai/plans/{plan_id}` | 查询状态与镜头预览 |
 | `POST /api/ai/plans/{plan_id}/cancel` | 取消任务或放弃未应用方案 |
+| `POST /api/ai/plans/{plan_id}/opening` | `{"preset": "smart" 或预设 id}`，在不改变镜头顺序的前提下整套切换高级开篇（蒙版、转场、叠加层、开篇音效），返回更新后的方案 |
 | `POST /api/ai/plans/{plan_id}/apply` | `{"revision": n, "confirm": true}`，成功时同时返回 `plan` 和最新工程状态 |
 | `POST /api/ai/plans/{plan_id}/undo` | `{"revision": n}`，恢复应用前的完整工程 |
 | `GET /api/admin/ai-config` | 管理员：当前云端配置（密钥只返回是否已设置和掩码提示）、来源（网页设置 / 环境变量 / 未配置）、云端是否可用 |
@@ -24,6 +25,8 @@
 版本规则：`GET /api/project` 返回的 `project.revision` 在每次实际改动（加片段、裁剪、字幕、转场、排序、删除、改标题或画幅）后加一；仅重复提交相同标题/画幅不会加一，所以「保存工程」不会让待应用的方案失效。生成方案时带上当前 `revision`；应用时若工程已被手工修改则返回 409 `revision_conflict`，方案不会覆盖它没见过的编辑。应用成功后工程会立即原子写入 `web_workspace/project.ljproject`，并在 `edit_log` 追加 `apply_ai_plan`；撤销同样落盘。AI 片段带 `ai_selected: true`，时间线以「AI」标签显示，片段编辑接受 `edit_plan.ALLOWED_TRANSITIONS` 中的全部转场，因此 AI 片段可以继续手工修改。
 
 错误响应统一为 `{"error": "<提示>", "code": "<错误码>"}`，状态码与本文「成员 3：浏览器接口」一节相同。
+
+顺序与报告：网页上传的素材没有 DJI 那样的文件名时间戳，`web_app.py` 会把 FFmpeg 探测到的 `creation_time` 归一化为 14 位拍摄时间；`ai_workflow.capture_stamps()` 在所有素材都有可靠时间时按拍摄时间排序，否则以 `media_ids` 的顺序作为拍摄顺序（面板里可用 ↑↓ 调整）。`opening=chronological` 关闭冷开场，所有镜头严格按时间排列；相邻镜头重复的对白只保留一次字幕。`result.report` 提供故事线（云端为模型返回的 `strategy`）、结构与顺序说明、运用的手法、每段素材的摘要与用量、以及桌面端格式的 `report_text`（`plan_preview_text`）。方案生成后即按桌面端流程做 `apply_opening_treatment`（默认 `smart` 推荐）与 `apply_global_creative_treatment`，`result.validation` / `creative` / `opening_presets` / `global_direction` 对应桌面端预览对话框的各部分；应用时 `plan_to_overlays` 写入叠加层、`sound_cues` 解析为内置音效、`global_creative_direction.music_id` 在工程没有背景音乐时设为自动配乐。
 
 云端配置由管理员在「账户管理 → AI 接口」中填写，服务端以 `protect_secret` 保存到 `web_workspace/ai_settings.json`（Windows 为 DPAPI，其他系统为 0600 权限文件），优先于「服务端云端配置」一节的环境变量；`AIWorkflow.configure_cloud()` 在保存后即时切换配置，进行中的任务沿用启动时的配置。密钥不回传浏览器、不写入工程文件，编辑成员账户无法读取或修改。未配置时 `capabilities.cloud_available` 为 `false`，面板中的云端选项会被禁用并提示管理员前往配置。
 
