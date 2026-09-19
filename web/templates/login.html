@@ -31,6 +31,7 @@
         <p id="formDescription" class="form-description">输入账户信息以打开剪辑工作区。</p>
         <div id="authBanner" class="auth-banner hidden" role="alert"></div>
         <form id="authForm">
+          <label id="setupTokenRow" class="hidden"><span data-i18n="setupToken">初始化密钥</span><input id="setupToken" name="setup_token" type="password" autocomplete="off" maxlength="256"><small data-i18n="setupTokenHint">由网站部署者从部署控制台获取，仅首次创建管理员时使用。</small></label>
           <label><span data-i18n="username">用户名</span><input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" required></label>
           <label><span data-i18n="password">密码</span><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required></label>
           <label id="confirmRow" class="hidden"><span data-i18n="confirmPassword">确认密码</span><input id="confirmPassword" name="confirm_password" type="password" autocomplete="new-password" minlength="8" maxlength="128"></label>

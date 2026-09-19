@@ -1,0 +1,23 @@
+# Temporary hackathon demo only. Files and accounts can disappear on restart.
+# Select this Blueprint path explicitly; the root render.yaml uses paid storage.
+services:
+  - type: web
+    name: lingjian-demo
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: LINGJIAN_ENV
+        value: production
+      - key: LINGJIAN_WEB_WORKSPACE
+        value: /tmp/lingjian
+      - key: LINGJIAN_MAX_UPLOAD_MB
+        value: "50"
+      - key: LINGJIAN_SECRET_KEY
+        generateValue: true
+      - key: LINGJIAN_SETUP_TOKEN
+        generateValue: true

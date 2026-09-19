@@ -17,6 +17,12 @@ FFmpeg lookup order: `LINGJIAN_FFMPEG`, `ffmpeg.exe` beside `web_app.py` (Window
 
 Uploaded media, the working project, the media catalog, exports, and the account database are kept under `web_workspace/` (override with `LINGJIAN_WEB_WORKSPACE`). The server binds to localhost by default.
 
+## Public deployment
+
+The repository includes a production Docker image and Render Blueprints for a persistent team workspace (`render.yaml`, paid compute and disk) or a temporary free demo (`deploy/render-free.yaml`, data may disappear on restart). See the [deployment guide](docs/deployment.md) for HTTPS hosting, first-admin setup, team accounts, and GPT API configuration. No live site is created just by adding these files.
+
+This version uses one shared project for all signed-in teammates. Production uses one Gunicorn worker, protects initial administrator creation with a setup key, limits concurrent exports, and stores uploads/accounts/projects on the configured volume. The CI check builds the Linux image and verifies a real captioned MP4 export and persistence across a server restart.
+
 ## What you can do
 
 | Area | Capabilities |

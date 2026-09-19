@@ -1,11 +1,13 @@
 const words = {
   zh: {
+    setupToken: '初始化密钥', setupTokenHint: '由网站部署者从部署控制台获取，仅首次创建管理员时使用。',
     pageTitle: '灵剪 · 登录', headline: '从一个片段，到你的故事。', subhead: '导入、剪辑、导出。在浏览器里，专注于每一个好镜头。',
     localData: '你的创作工作区', localDataHint: '登录后继续整理素材、编辑片段和导出作品。', username: '用户名', password: '密码', confirmPassword: '确认密码',
     loginTitle: '登录灵剪', loginDescription: '输入账户信息以打开剪辑工作区。', loginAction: '登录', setupEyebrow: 'FIRST-TIME SETUP', setupTitle: '创建管理员账户',
     setupDescription: '这是首次启动。请创建第一个管理员；以后可在账户管理中添加其他用户。', setupAction: '创建管理员并进入', privacy: '请在离开前保存工程，仅在可信设备上保持登录。', switchLanguage: 'Switch to English', requestFailed: '请求失败'
   },
   en: {
+    setupToken: 'Setup key', setupTokenHint: 'The site owner can find this in the hosting dashboard. It is only needed for the first administrator.',
     pageTitle: 'LingJian · Sign In', headline: 'A little cut. A big story.', subhead: 'Import, edit, and export. Make space for your best moments, right in your browser.',
     localData: 'Your creative workspace', localDataHint: 'Sign in to organize your media, shape your clips, and export your story.', username: 'Username', password: 'Password', confirmPassword: 'Confirm password',
     loginTitle: 'Sign in to LingJian', loginDescription: 'Enter your account details to open the editing workspace.', loginAction: 'Sign In', setupEyebrow: 'FIRST-TIME SETUP', setupTitle: 'Create an administrator',
@@ -54,7 +56,10 @@ $('#authForm').addEventListener('submit', async (event) => {
   $('#authBanner').classList.add('hidden');
   $('#submitBtn').disabled = true;
   const payload = {username: $('#username').value, password: $('#password').value};
-  if (state.setup) payload.confirm_password = $('#confirmPassword').value;
+  if (state.setup) {
+    payload.confirm_password = $('#confirmPassword').value;
+    payload.setup_token = $('#setupToken').value;
+  }
   try {
     const result = await request(state.setup ? '/api/auth/setup' : '/api/auth/login', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
@@ -72,6 +77,8 @@ request('/api/auth/status').then((data) => {
   if (data.authenticated) return window.location.assign('/');
   state.csrf = data.csrf_token;
   state.setup = data.setup_required;
+  $('#setupTokenRow').classList.toggle('hidden', !data.setup_token_required);
+  $('#setupToken').required = Boolean(data.setup_token_required);
   $('#confirmRow').classList.toggle('hidden', !state.setup);
   $('#confirmPassword').required = state.setup;
   $('#password').autocomplete = state.setup ? 'new-password' : 'current-password';
