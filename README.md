@@ -1,7 +1,3 @@
-# LingJian AI Video Editor
-
-LingJian (灵剪) is a Windows desktop video editor for turning raw footage into an editable timeline. Cut clips by hand, build an assembly with local analysis, or use a cloud AI service to propose a story. Review the proposed edits before applying them, then refine the timeline and export locally with FFmpeg.
-
 **Version:** 4.13.0 · **Platform:** Windows 10 / 11 · **Source runtime:** Python 3.11+
 
 [Download the Windows installer](https://github.com/MikeKang202210061/lingjian-ai-video-editor/releases/download/v4.13.0/LingJian-AI-Video-Editor-4.13.0-Windows-Setup.exe) · [Download details and checksum](docs/download_guide.md) · [Release notes](docs/release_notes.md)
