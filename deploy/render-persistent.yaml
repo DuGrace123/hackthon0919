@@ -1,0 +1,28 @@
+# Paid hosting: review the price in Render before applying this Blueprint.
+# Keep one instance and one Gunicorn worker until shared state is externalized.
+services:
+  - type: web
+    name: lingjian-studio
+    runtime: docker
+    plan: 1c-2g
+    region: singapore
+    branch: main
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: LINGJIAN_ENV
+        value: production
+      - key: LINGJIAN_WEB_WORKSPACE
+        value: /var/data/lingjian
+      - key: LINGJIAN_MAX_UPLOAD_MB
+        value: "512"
+      - key: LINGJIAN_SECRET_KEY
+        generateValue: true
+      - key: LINGJIAN_SETUP_TOKEN
+        generateValue: true
+    disk:
+      name: lingjian-data
+      mountPath: /var/data
+      sizeGB: 5

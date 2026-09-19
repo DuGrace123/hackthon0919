@@ -1,0 +1,11 @@
+**
+!*.py
+!requirements-web.txt
+!requirements-deploy.txt
+!web/
+!web/**
+!assets/
+!assets/**
+!docs/
+!docs/third_party_notices.md
+!Dockerfile

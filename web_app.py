@@ -143,7 +143,14 @@ def _default_export_runner(ffmpeg: str, project: Project, output: Path) -> dict:
 def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner=None, ai_analyzer=None,
                cloud_tester=None) -> Flask:
     app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
-    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
+    production = os.environ.get("LINGJIAN_ENV", "development") == "production"
+    setup_token = os.environ.get("LINGJIAN_SETUP_TOKEN", "")
+    upload_limit_mb = int(os.environ.get("LINGJIAN_MAX_UPLOAD_MB", "2048"))
+    if upload_limit_mb < 1:
+        raise ValueError("LINGJIAN_MAX_UPLOAD_MB must be a positive integer")
+    if production and len(os.environ.get("LINGJIAN_SECRET_KEY", "")) < 32:
+        raise ValueError("Production requires LINGJIAN_SECRET_KEY with at least 32 characters")
+    app.config["MAX_CONTENT_LENGTH"] = upload_limit_mb * 1024 * 1024
 
     workspace_path = Path(workspace or os.environ.get("LINGJIAN_WEB_WORKSPACE", ROOT / "web_workspace")).resolve()
     upload_path = workspace_path / "uploads"
@@ -156,10 +163,13 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     app.secret_key = _load_secret_key(workspace_path)
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SECURE=production,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
     )
     accounts = AccountStore(workspace_path / "accounts.sqlite3")
+    if production and accounts.count() == 0 and len(setup_token) < 32:
+        raise ValueError("First production launch requires LINGJIAN_SETUP_TOKEN with at least 32 characters")
 
     ffmpeg = resolve_ffmpeg()
 
@@ -171,6 +181,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     run_export = export_runner or _default_export_runner
     lock = threading.RLock()
     jobs: dict[str, dict] = {}
+    export_slot = threading.BoundedSemaphore(1)
 
     def csrf_token() -> str:
         token = session.get("csrf_token")
@@ -286,10 +297,12 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
         except Exception as exc:
             output.unlink(missing_ok=True)
             jobs[job_id] = {"status": "error", "progress": 0, "message": str(exc)}
+        finally:
+            export_slot.release()
 
     @app.errorhandler(413)
     def too_large(_error):
-        return jsonify(error="文件过大，单次上传上限为 2 GB"), 413
+        return jsonify(error=f"文件过大，单次上传上限为 {upload_limit_mb} MB"), 413
 
     @app.errorhandler(ValueError)
     def invalid_request(error):
@@ -298,6 +311,8 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     @app.errorhandler(Exception)
     def unexpected_error(error):
         app.logger.exception("Unhandled web editor error")
+        if production:
+            return jsonify(error="服务器处理失败，请稍后重试"), 500
         return jsonify(error=f"服务器处理失败：{error}"), 500
 
     @app.get("/login")
@@ -308,8 +323,10 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
 
     @app.get("/api/auth/status")
     def auth_status():
+        setup_required = accounts.count() == 0
         return jsonify(
-            setup_required=accounts.count() == 0,
+            setup_required=setup_required,
+            setup_token_required=setup_required and bool(setup_token),
             authenticated=current_account() is not None,
             user=current_account(),
             csrf_token=csrf_token(),
@@ -317,14 +334,18 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
 
     @app.post("/api/auth/setup")
     def auth_setup():
-        if accounts.count() != 0:
-            return jsonify(error="管理员账户已经创建，请直接登录"), 409
         payload = request.get_json(silent=True) or {}
-        username = validate_username(payload.get("username"))
-        password = validate_password(payload.get("password"))
-        if password != str(payload.get("confirm_password") or ""):
-            raise ValueError("两次输入的密码不一致")
-        user = accounts.create(username, generate_password_hash(password), "admin")
+        with lock:
+            if accounts.count() != 0:
+                return jsonify(error="管理员账户已经创建，请直接登录"), 409
+            supplied = str(payload.get("setup_token") or "")
+            if setup_token and not hmac.compare_digest(setup_token.encode(), supplied.encode()):
+                return jsonify(error="初始化密钥无效，请使用部署控制台提供的密钥"), 403
+            username = validate_username(payload.get("username"))
+            password = validate_password(payload.get("password"))
+            if password != str(payload.get("confirm_password") or ""):
+                raise ValueError("两次输入的密码不一致")
+            user = accounts.create(username, generate_password_hash(password), "admin")
         session.clear()
         session.permanent = True
         session["user_id"] = user["id"]
@@ -845,10 +866,17 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             if export_runner is None and not ffmpeg:
                 raise ValueError("未找到 FFmpeg，当前无法导出。请配置 LINGJIAN_FFMPEG 后重启服务。")
             snapshot = Project.from_dict(project.to_dict())
+        if not export_slot.acquire(blocking=False):
+            return jsonify(error="已有视频正在导出，请等待完成后再试"), 409
         job_id = uuid.uuid4().hex
         output = export_path / f"{job_id}.mp4"
         jobs[job_id] = {"status": "queued", "progress": 0}
-        threading.Thread(target=export_worker, args=(job_id, snapshot, output), daemon=True).start()
+        try:
+            threading.Thread(target=export_worker, args=(job_id, snapshot, output), daemon=True).start()
+        except Exception:
+            jobs.pop(job_id, None)
+            export_slot.release()
+            raise
         return jsonify(job_id=job_id, status_url=f"/api/export/{job_id}"), 202
 
     @app.get("/api/export/<job_id>")

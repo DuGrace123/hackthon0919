@@ -236,6 +236,11 @@ def _font_path(name,text=''):
     bundled={'站酷快乐体':'ZCOOLKuaiLe-Regular.ttf','站酷庆科黄油体':'ZCOOLQingKeHuangYou-Regular.ttf','霞鹜文楷':'LXGWWenKai-Regular.ttf'}
     root=Path(getattr(sys,'_MEIPASS',Path(__file__).parent));custom=root/'assets'/'fonts'/bundled.get(str(name),'')
     if bundled.get(str(name)) and custom.exists():return str(custom).replace('\\','/').replace(':','\\:')
+    # The web container and macOS do not have Windows Fonts. This bundled OFL
+    # font includes Chinese glyphs, so captions also render on the Linux host.
+    if os.name != 'nt':
+        portable = root / 'assets' / 'fonts' / 'LXGWWenKai-Regular.ttf'
+        if portable.is_file():return str(portable).replace('\\','/').replace(':','\\:')
     fonts={'微软雅黑':'msyh.ttc','黑体':'simhei.ttf','宋体':'simsun.ttc','等线':'Deng.ttf','楷体':'simkai.ttf','仿宋':'simfang.ttf','Arial':'arial.ttf','Impact':'impact.ttf','Consolas':'consola.ttf'}
     if re.search(r'[\u3400-\u9fff]',str(text)) and str(name) in ('Arial','Impact','Consolas'):name='微软雅黑'
     return 'C\\:/Windows/Fonts/'+fonts.get(str(name),fonts['微软雅黑'])

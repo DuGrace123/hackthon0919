@@ -1,0 +1,24 @@
+# Free hackathon demo: uploads and accounts are temporary and reset on restart.
+# For persistent storage, review deploy/render-persistent.yaml and its costs.
+services:
+  - type: web
+    name: lingjian-demo
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: LINGJIAN_ENV
+        value: production
+      - key: LINGJIAN_WEB_WORKSPACE
+        value: /tmp/lingjian
+      - key: LINGJIAN_MAX_UPLOAD_MB
+        value: "50"
+      - key: LINGJIAN_SECRET_KEY
+        generateValue: true
+      - key: LINGJIAN_SETUP_TOKEN
+        generateValue: true
