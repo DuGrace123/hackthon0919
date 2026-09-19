@@ -21,5 +21,6 @@ examples/
 # Local projects, caches, and credentials
 *.lingjian.json
 *.autosave.json
+workspace/
 .env
 .env.*

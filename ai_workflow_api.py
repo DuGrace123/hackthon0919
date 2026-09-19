@@ -32,14 +32,14 @@ class UndoRequest(BaseModel):
     revision: StrictInt = Field(ge=0)
 
 
-def create_ai_router(workflow: AIWorkflow, *, current_user) -> APIRouter:
+def create_ai_router(workflow: AIWorkflow, *, current_user, prefix: str = '/api') -> APIRouter:
     """current_user is a required host dependency returning a verified user ID.
 
     Do not derive it from a client-controlled header without authentication.
     The host must provide session/CSRF policy and close workflow on shutdown.
     All blocking handlers are normal def functions, run in FastAPI's threadpool.
     """
-    router = APIRouter(prefix='/api', tags=['AI workflow'])
+    router = APIRouter(prefix=prefix, tags=['AI workflow'])
     Actor = Annotated[str, Depends(current_user)]
 
     def call(function, *args, **kwargs):
