@@ -1,3 +1,4 @@
+{% from '_icons.html' import icon %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -6,105 +7,128 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>灵剪 · 网页剪辑台</title>
   <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='base.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
+  {% include '_icons.html' %}
   <header class="topbar">
-    <div class="brand"><span>✦</span> 灵剪 <small>Web Studio</small></div>
-    <label class="project-name"><span data-i18n="projectName">工程名称</span> <input id="projectTitle" maxlength="120"></label>
-    <label class="ratio"><span data-i18n="ratio">画幅</span>
-      <select id="projectRatio"><option>9:16</option><option>16:9</option><option>1:1</option></select>
-    </label>
-    <button id="languageToggle" class="language-toggle" type="button" aria-label="Switch to English" title="Switch to English">EN</button>
-    {% if current_user.role == 'admin' %}<a class="account-action" href="{{ url_for('account_admin_page') }}" data-i18n="accounts">账户管理</a>{% endif %}
-    <span class="user-chip" title="{{ current_user.role }}">{{ current_user.username }}</span>
-    <button id="logoutBtn" class="account-action" type="button" data-i18n="logout">退出</button>
-    <button id="aiBtn" class="ai-button" type="button" data-i18n="aiDirector">AI 导演</button>
-    <button id="saveBtn" class="secondary" data-i18n="saveProject">保存工程</button>
-    <button id="exportBtn" class="primary" data-i18n="exportMp4">导出 MP4</button>
+    <div class="brand"><span class="brand-mark">✦</span> 灵剪 <small>STUDIO</small></div>
+    <span class="header-divider" aria-hidden="true"></span>
+    <label class="project-name"><span class="sr-only" data-i18n="projectName">工程名称</span><input id="projectTitle" maxlength="120" required></label>
+    <div class="topbar-actions">
+      <button id="aiBtn" class="ai-button" type="button"><span aria-hidden="true">✦</span><span data-i18n="aiDirector">AI 导演</span></button>
+      <button id="saveBtn" class="save-button">{{ icon('save') }}<span data-i18n="saveProject">保存</span></button>
+      <button id="exportBtn" class="primary">{{ icon('export') }}<span data-i18n="exportMp4">导出视频</span></button>
+      <details class="account-menu">
+        <summary aria-label="账户菜单" data-i18n-aria-label="accountMenu"><span class="avatar">{{ current_user.username[:1] | upper }}</span>{{ icon('down') }}</summary>
+        <div class="account-dropdown">
+          <span class="account-name">{{ current_user.username }}</span>
+          <button id="languageToggle" type="button" aria-label="Switch to English">EN</button>
+          {% if current_user.role == 'admin' %}<a href="{{ url_for('account_admin_page') }}" data-i18n="accounts">账户管理</a>{% endif %}
+          <button id="logoutBtn" type="button" data-i18n="logout">退出登录</button>
+        </div>
+      </details>
+    </div>
   </header>
 
-  <div id="banner" class="banner" role="status" aria-live="polite" data-i18n="connecting">正在连接本地剪辑服务…</div>
-
   <main class="workspace">
-    <aside class="panel library-panel">
+    <aside class="panel library-panel" aria-labelledby="libraryHeading">
       <div class="panel-heading">
-        <div><p class="eyebrow">MEDIA</p><h2 data-i18n="mediaLibrary">素材库</h2></div>
-        <label class="upload-button"><span data-i18n="importMedia">＋ 导入</span><input id="uploadInput" type="file" multiple accept="video/*,audio/*"></label>
+        <h2 id="libraryHeading" data-i18n="mediaLibrary">素材库</h2><span id="mediaCount" class="count-badge">0</span>
+        <button id="importBtn" class="import-button" type="button">{{ icon('plus') }}<span data-i18n="importMedia">导入</span></button>
+        <input id="uploadInput" class="sr-only" type="file" multiple accept="video/*,audio/*,.mkv,.m4v,.flac,.m4a" tabindex="-1" aria-label="导入素材" data-i18n-aria-label="importMedia">
       </div>
-      <div id="uploadProgress" class="loading-row hidden"><span class="spinner"></span><span data-i18n="readingMedia">正在读取媒体信息…</span></div>
-      <div id="mediaEmpty" class="empty-state">
-        <div class="empty-icon">▧</div><strong data-i18n="noMedia">还没有素材</strong>
-        <p data-i18n="noMediaHint">导入视频或音频，然后将需要的镜头加入时间线。</p>
+      <div class="library-tools">
+        <label class="search-field">{{ icon('search') }}<span class="sr-only" data-i18n="searchMedia">搜索素材</span><input id="mediaSearch" type="search" placeholder="搜索素材…" data-i18n-placeholder="searchMedia" autocomplete="off"></label>
+        <div class="media-filters" role="group" aria-label="素材类型" data-i18n-aria-label="mediaType">
+          <button type="button" data-filter="all" aria-pressed="true" data-i18n="allMedia">全部</button>
+          <button type="button" data-filter="video" aria-pressed="false">{{ icon('film') }}<span data-i18n="video">视频</span></button>
+          <button type="button" data-filter="audio" aria-pressed="false">{{ icon('music') }}<span data-i18n="audio">音频</span></button>
+        </div>
       </div>
-      <div id="mediaGrid" class="media-grid"></div>
+      <div id="mediaDropzone" class="media-body">
+        <div id="uploadProgress" class="loading-row hidden" role="status"><span class="spinner"></span><span data-i18n="readingMedia">正在读取素材…</span></div>
+        <div id="mediaEmpty" class="empty-state">
+          <div class="empty-icon lavender">{{ icon('film') }}</div><strong data-i18n="noMedia">让故事从这里开始</strong>
+          <p data-i18n="noMediaHint">导入视频或音频，挑选你想留下的片刻。</p>
+          <button type="button" data-import>{{ icon('upload') }}<span data-i18n="importMedia">导入</span></button>
+        </div>
+        <div id="searchEmpty" class="empty-state hidden"><div class="empty-icon">{{ icon('search') }}</div><strong data-i18n="noResults">没有找到素材</strong><p data-i18n="noResultsHint">换个关键词，或查看全部类型。</p><button id="clearSearch" type="button" data-i18n="clearFilters">重置筛选</button></div>
+        <p id="audioNotice" class="audio-notice hidden" data-i18n="audioPreviewOnly">音频可导入和预览；当前时间线仅支持视频。</p>
+        <div id="mediaGrid" class="media-grid"></div>
+        <div class="drop-overlay" aria-hidden="true">{{ icon('upload') }}<span data-i18n="dropHere">松开以导入素材</span></div>
+      </div>
+      <p class="library-footnote">{{ icon('upload') }}<span data-i18n="dropHint">可拖入视频或音频文件</span></p>
     </aside>
 
-    <section class="panel player-panel">
-      <div class="panel-heading compact">
-        <div><p class="eyebrow">PROGRAM</p><h2 id="playerTitle" data-i18n="programMonitor">节目监视器</h2></div>
-        <span id="timeReadout" class="timecode">00:00.000</span>
+    <section class="panel player-panel" aria-labelledby="previewHeading">
+      <div class="panel-heading">
+        <h2 id="previewHeading" data-i18n="programMonitor">预览</h2>
+        <label class="ratio"><span data-i18n="ratio">画幅</span><select id="projectRatio"><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
       </div>
       <div class="player-shell">
-        <video id="player" controls preload="metadata"></video>
-        <div id="playerEmpty" class="player-empty"><span>▶</span><p data-i18n="previewHint">选择素材或时间线片段进行预览</p></div>
+        <video id="player" class="hidden" controls playsinline preload="metadata" aria-label="素材预览" data-i18n-aria-label="sourcePreview"></video>
+        <div id="playerEmpty" class="player-empty"><div class="preview-outline">{{ icon('play') }}</div><h3 data-i18n="previewWelcome">把灵感剪成故事</h3><p data-i18n="previewHint">选择一个素材，开始预览</p></div>
+        <div id="audioPreview" class="audio-preview hidden" aria-hidden="true">{{ icon('music') }}</div>
       </div>
+      <div class="player-footer"><span id="playerTitle" data-i18n="sourcePreview">素材预览</span><span id="timeReadout" class="timecode">00:00.000</span></div>
+      <p class="preview-note" data-i18n="previewNote">此处预览原素材，字幕与转场在导出视频中生效。</p>
     </section>
 
-    <aside class="panel inspector-panel">
-      <div class="panel-heading"><div><p class="eyebrow">INSPECTOR</p><h2 data-i18n="clipEditing">片段编辑</h2></div></div>
-      <div id="inspectorEmpty" class="empty-state"><div class="empty-icon">◎</div><strong data-i18n="noClip">未选择片段</strong><p data-i18n="noClipHint">在时间线上选择一个片段以裁剪、调整字幕和转场。</p></div>
+    <aside class="panel inspector-panel" aria-labelledby="inspectorHeading">
+      <div class="panel-heading"><h2 id="inspectorHeading" data-i18n="clipEditing">片段设置</h2>{{ icon('sliders') }}</div>
+      <div id="inspectorEmpty" class="empty-state"><div class="empty-icon peach">{{ icon('sliders') }}</div><strong data-i18n="noClip">为片段加一点细节</strong><p data-i18n="noClipHint">在时间线上选择片段，即可裁剪、添加字幕和调整声音。</p></div>
       <form id="clipForm" class="clip-form hidden">
-        <div class="selected-name" id="selectedName"></div>
-        <label><span data-i18n="inPoint">入点（秒）</span><input id="clipStart" type="number" min="0" step="0.01" required></label>
-        <label><span data-i18n="outPoint">出点（秒）</span><input id="clipEnd" type="number" min="0.01" step="0.01" required></label>
-        <label><span data-i18n="captions">字幕</span><textarea id="clipCaption" maxlength="120" rows="4" placeholder="输入片段字幕" data-i18n-placeholder="captionPlaceholder"></textarea></label>
-        <label><span data-i18n="transition">转场</span><select id="clipTransition"><option value="none" data-i18n="cut">直接切换</option><option value="fade" data-i18n="fade">淡入淡出</option><option value="dissolve" data-i18n="dissolve">叠化</option><option value="wipeleft" data-i18n="wipeLeft">向左擦除</option><option value="wiperight" data-i18n="wipeRight">向右擦除</option><option value="slideup" data-i18n="slideUp">向上滑动</option><option value="slidedown" data-i18n="slideDown">向下滑动</option></select></label>
-        <label><span data-i18n="sourceAudio">原声</span> <span id="volumeValue">100%</span><input id="clipVolume" type="range" min="0" max="2" step="0.05"></label>
-        <button class="primary" type="submit" data-i18n="applyClip">应用片段修改</button>
-        <button class="danger" id="deleteClipBtn" type="button" data-i18n="deleteClip">从时间线删除</button>
+        <div class="selected-file">{{ icon('film') }}<span id="selectedName"></span></div>
+        <div class="trim-fields">
+          <label><span data-i18n="inPoint">开始（秒）</span><input id="clipStart" type="number" min="0" step="0.01" required></label>
+          <label><span data-i18n="outPoint">结束（秒）</span><input id="clipEnd" type="number" min="0.01" step="0.01" required></label>
+        </div>
+        <label><span data-i18n="captions">字幕</span><textarea id="clipCaption" maxlength="120" rows="3" placeholder="给这段画面写一句话…" data-i18n-placeholder="captionPlaceholder"></textarea></label>
+        <details class="advanced-settings">
+          <summary data-i18n="moreSettings">转场与声音</summary>
+          <label><span data-i18n="transition">转场</span><select id="clipTransition"><option value="none" data-i18n="cut">直接切换</option><option value="fade" data-i18n="fade">淡入淡出</option><option value="dissolve" data-i18n="dissolve">叠化</option><option value="wipeleft" data-i18n="wipeLeft">向左擦除</option><option value="wiperight" data-i18n="wipeRight">向右擦除</option><option value="slideup" data-i18n="slideUp">向上滑动</option><option value="slidedown" data-i18n="slideDown">向下滑动</option></select></label>
+          <label><span class="volume-label"><span data-i18n="sourceAudio">原声</span><output id="volumeValue" for="clipVolume">100%</output></span><input id="clipVolume" type="range" min="0" max="2" step="0.05"></label>
+        </details>
+        <button class="primary" type="submit" data-i18n="applyClip">应用修改</button>
+        <button class="danger delete-button" id="deleteClipBtn" type="button">{{ icon('trash') }}<span data-i18n="deleteClip">移除片段</span></button>
       </form>
     </aside>
 
-    <div id="timelineSplitter" class="timeline-splitter" role="separator" aria-label="调整时间线高度" data-i18n-aria-label="resizeTimeline" aria-orientation="horizontal" tabindex="0">
-      <span></span><span></span><span></span>
-    </div>
+    <div id="timelineSplitter" class="timeline-splitter" role="separator" aria-label="调整时间线高度" data-i18n-aria-label="resizeTimeline" aria-orientation="horizontal" aria-controls="timelinePanel" tabindex="0"><span></span></div>
 
-    <section class="panel timeline-panel">
-      <div class="panel-heading compact timeline-toolbar">
-        <div><p class="eyebrow">TIMELINE</p><h2 data-i18n="timeline">时间线</h2></div>
-        <div class="timeline-controls">
-          <span data-i18n="zoom">缩放</span><input id="timelineZoom" type="range" min="35" max="150" value="70" aria-label="时间线缩放" data-i18n-aria-label="timelineZoom">
-          <span id="timelineDuration" class="duration-chip">0.0 秒</span>
-        </div>
+    <section id="timelinePanel" class="panel timeline-panel" aria-labelledby="timelineHeading">
+      <div class="panel-heading timeline-toolbar">
+        {{ icon('timeline') }}<h2 id="timelineHeading" data-i18n="timeline">时间线</h2><span id="clipCount" class="count-badge">0</span>
+        <span class="timeline-tip" data-i18n="reorderHint">拖动片段调整顺序</span>
+        <div class="timeline-controls"><label for="timelineZoom" data-i18n="zoom">缩放</label><input id="timelineZoom" type="range" min="35" max="150" value="70" aria-label="时间线缩放" data-i18n-aria-label="timelineZoom"><span id="timelineDuration" class="duration-chip">0.0 秒</span></div>
       </div>
-      <div id="timelineEmpty" class="empty-state horizontal">
-        <div class="empty-icon">≋</div><div><strong data-i18n="emptyTimeline">时间线为空</strong><p data-i18n="emptyTimelineHint">从素材库点击“加入时间线”开始剪辑。</p></div>
-      </div>
+      <div id="timelineEmpty" class="timeline-empty"><div class="empty-icon mint">{{ icon('timeline') }}</div><div><strong data-i18n="emptyTimeline">故事，还差第一个镜头</strong><p data-i18n="emptyTimelineHint">点击素材旁的 ＋，将它加入时间线。</p></div></div>
       <div id="timelineWorkspace" class="timeline-workspace hidden">
-        <div class="track-labels">
-          <div class="ruler-label">TC</div><div>V1 <small data-i18n="video">视频</small></div><div>A1 <small data-i18n="sourceAudioShort">原声</small></div>
-        </div>
-        <div class="timeline-scroll">
+        <div class="track-labels"><div class="ruler-label">{{ icon('timeline') }}</div><div>V1 <small data-i18n="video">视频</small></div><div>A1 <small data-i18n="sourceAudioShort">原声</small></div></div>
+        <div class="timeline-scroll" tabindex="0" aria-label="滚动时间线" data-i18n-aria-label="scrollTimeline">
           <div id="timelineRuler" class="timeline-ruler"></div>
           <div id="timeline" class="timeline video-track" aria-label="时间线片段" data-i18n-aria-label="timelineClips"></div>
           <div id="audioTrack" class="timeline audio-track" aria-label="音频时间线" data-i18n-aria-label="audioTimeline"></div>
-          <div id="playhead" class="playhead"><span></span></div>
+          <div id="playhead" class="playhead hidden"><span></span></div>
         </div>
       </div>
     </section>
   </main>
+  <footer class="statusbar"><div id="banner" class="banner" role="status" aria-live="polite" data-i18n="connecting">正在连接剪辑服务…</div><span>灵剪 Web Studio</span></footer>
 
-  <div id="exportDialog" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-card"><span class="spinner large"></span><h3 data-i18n="exporting">正在导出 MP4</h3><p id="exportMessage" data-i18n="preparingRender">正在准备渲染任务…</p><div class="progress-track"><div id="exportBar"></div></div><a id="downloadLink" class="primary button-link hidden" data-i18n="downloadExport">下载导出文件</a><button id="closeExport" class="secondary hidden" data-i18n="close">关闭</button></div>
-  </div>
+  <dialog id="exportDialog" class="export-dialog" aria-labelledby="exportHeading" aria-describedby="exportMessage">
+    <div class="modal-card"><span id="exportSpinner" class="spinner large"></span><h3 id="exportHeading" data-i18n="exporting">正在导出视频</h3><p id="exportMessage" role="status" data-i18n="preparingRender">正在准备导出…</p><div class="progress-track"><div id="exportBar"></div></div><div class="export-actions"><a id="downloadLink" class="primary button-link hidden" data-i18n="downloadExport">下载 MP4</a><button id="closeExport" type="button" data-i18n="close">关闭</button></div></div>
+  </dialog>
 
-  <div id="aiDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="aiDialogTitle">
+  <dialog id="aiDialog" class="ai-dialog" aria-labelledby="aiDialogTitle">
     <div class="modal-card ai-card">
       <div class="ai-heading">
         <div><p class="eyebrow">AI DIRECTOR</p><h3 id="aiDialogTitle" data-i18n="aiDirector">AI 导演</h3></div>
         <button id="aiClose" class="icon-button" type="button" aria-label="关闭" data-i18n-aria-label="close">✕</button>
       </div>
+      <p id="aiError" class="ai-error hidden" role="alert"></p>
       <p id="aiNotice" class="ai-notice"></p>
       <p id="aiCloudHint" class="ai-hint hidden"></p>
 
@@ -158,8 +182,8 @@
         <div class="ai-actions"><button id="aiRetry" class="primary" type="button" data-i18n="aiRetry">返回重新设置</button></div>
       </div>
     </div>
-  </div>
+  </dialog>
 
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>

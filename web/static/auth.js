@@ -1,15 +1,15 @@
 const words = {
   zh: {
-    pageTitle: '灵剪 · 登录', headline: '你的本地智能剪辑工作区', subhead: '项目、媒体和账户数据保存在本机。登录后即可继续剪辑。',
-    localData: '本地数据', localDataHint: '密码经过单向加密，账户保存于本地 SQLite 数据库。', username: '用户名', password: '密码', confirmPassword: '确认密码',
+    pageTitle: '灵剪 · 登录', headline: '从一个片段，到你的故事。', subhead: '导入、剪辑、导出。在浏览器里，专注于每一个好镜头。',
+    localData: '你的创作工作区', localDataHint: '登录后继续整理素材、编辑片段和导出作品。', username: '用户名', password: '密码', confirmPassword: '确认密码',
     loginTitle: '登录灵剪', loginDescription: '输入账户信息以打开剪辑工作区。', loginAction: '登录', setupEyebrow: 'FIRST-TIME SETUP', setupTitle: '创建管理员账户',
-    setupDescription: '这是首次启动。请创建第一个管理员；以后可在账户管理中添加其他用户。', setupAction: '创建管理员并进入', privacy: '仅在可信设备上保持登录。关闭浏览器不会删除本地工程。', switchLanguage: 'Switch to English', requestFailed: '请求失败'
+    setupDescription: '这是首次启动。请创建第一个管理员；以后可在账户管理中添加其他用户。', setupAction: '创建管理员并进入', privacy: '请在离开前保存工程，仅在可信设备上保持登录。', switchLanguage: 'Switch to English', requestFailed: '请求失败'
   },
   en: {
-    pageTitle: 'LingJian · Sign In', headline: 'Your local intelligent editing workspace', subhead: 'Projects, media, and account data stay on this computer. Sign in to continue editing.',
-    localData: 'Local data', localDataHint: 'Passwords are one-way hashed and accounts are stored in a local SQLite database.', username: 'Username', password: 'Password', confirmPassword: 'Confirm password',
+    pageTitle: 'LingJian · Sign In', headline: 'A little cut. A big story.', subhead: 'Import, edit, and export. Make space for your best moments, right in your browser.',
+    localData: 'Your creative workspace', localDataHint: 'Sign in to organize your media, shape your clips, and export your story.', username: 'Username', password: 'Password', confirmPassword: 'Confirm password',
     loginTitle: 'Sign in to LingJian', loginDescription: 'Enter your account details to open the editing workspace.', loginAction: 'Sign In', setupEyebrow: 'FIRST-TIME SETUP', setupTitle: 'Create an administrator',
-    setupDescription: 'This is the first launch. Create the first administrator; you can add other users later in Account Management.', setupAction: 'Create Admin and Continue', privacy: 'Stay signed in only on a trusted device. Closing the browser does not delete local projects.', switchLanguage: '切换到中文', requestFailed: 'Request failed'
+    setupDescription: 'This is the first launch. Create the first administrator; you can add other users later in Account Management.', setupAction: 'Create Admin and Continue', privacy: 'Save your project before leaving. Stay signed in only on a trusted device.', switchLanguage: '切换到中文', requestFailed: 'Request failed'
   }
 };
 

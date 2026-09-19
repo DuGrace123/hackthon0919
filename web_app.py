@@ -162,7 +162,12 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     accounts = AccountStore(workspace_path / "accounts.sqlite3")
 
     ffmpeg = resolve_ffmpeg()
-    probe = probe_fn or probe_media
+
+    def probe(ffmpeg_path, path):
+        if probe_fn is not None:
+            return probe_fn(ffmpeg_path, path)
+        return probe_media(ffmpeg_path, path, require_video=Path(path).suffix.lower() not in AUDIO_EXT)
+
     run_export = export_runner or _default_export_runner
     lock = threading.RLock()
     jobs: dict[str, dict] = {}
@@ -451,39 +456,49 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
         if not files or not any(item.filename for item in files):
             raise ValueError("请选择要上传的媒体文件")
         created = []
-        for incoming in files:
-            original_name = Path(incoming.filename or "").name
-            extension = Path(original_name).suffix.lower()
-            if extension not in ALLOWED_EXTENSIONS:
-                raise ValueError(f"不支持的文件格式：{extension or '无扩展名'}")
-            safe_name = secure_filename(original_name) or f"media{extension}"
-            media_id = uuid.uuid4().hex
-            stored_name = f"{media_id}-{safe_name}"
-            destination = upload_path / stored_name
-            incoming.save(destination)
-            try:
+        destinations = []
+        try:
+            for incoming in files:
+                original_name = Path(incoming.filename or "").name
+                extension = Path(original_name).suffix.lower()
+                if extension not in ALLOWED_EXTENSIONS:
+                    raise ValueError(f"不支持的文件格式：{extension or '无扩展名'}")
+                safe_name = secure_filename(original_name) or f"media{extension}"
+                media_id = uuid.uuid4().hex
+                stored_name = f"{media_id}-{safe_name}"
+                destination = upload_path / stored_name
+                destinations.append(destination)
+                incoming.save(destination)
                 if probe_fn is None and not ffmpeg:
                     raise ValueError("未找到 FFmpeg。请将 ffmpeg.exe 放在项目根目录，或设置 LINGJIAN_FFMPEG 环境变量。")
                 metadata = probe(ffmpeg, str(destination))
-            except Exception:
+                item = {
+                    "id": media_id,
+                    "name": original_name,
+                    "stored_name": stored_name,
+                    "path": str(destination),
+                    "duration": round(float(metadata["duration"]), 3),
+                    "has_audio": bool(metadata.get("has_audio")),
+                    "width": int(metadata.get("width") or 0),
+                    "height": int(metadata.get("height") or 0),
+                    "codec": str(metadata.get("codec") or "unknown"),
+                    "capture_order": str(metadata.get("capture_order") or ""),
+                    "created_at": uuid.uuid1().hex,
+                }
+                created.append({**item, "url": f"/media/{stored_name}"})
+            # Publish the batch only after every file is valid; failed batches leave no orphans.
+            with lock:
+                catalog.update({item["id"]: {k: v for k, v in item.items() if k != "url"} for item in created})
+                try:
+                    save_catalog()
+                except Exception:
+                    for item in created:
+                        catalog.pop(item["id"], None)
+                    raise
+        except Exception:
+            for destination in destinations:
                 destination.unlink(missing_ok=True)
-                raise
-            item = {
-                "id": media_id,
-                "name": original_name,
-                "stored_name": stored_name,
-                "path": str(destination),
-                "duration": round(float(metadata["duration"]), 3),
-                "has_audio": bool(metadata.get("has_audio")),
-                "width": int(metadata.get("width") or 0),
-                "height": int(metadata.get("height") or 0),
-                "codec": str(metadata.get("codec") or "unknown"),
-                "capture_order": str(metadata.get("capture_order") or ""),
-                "created_at": uuid.uuid1().hex,
-            }
-            catalog[media_id] = item
-            created.append({**item, "url": f"/media/{stored_name}"})
-        save_catalog()
+            raise
         return jsonify(media=created), 201
 
     @app.get("/media/<path:filename>")
@@ -494,6 +509,8 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     def add_clip():
         payload = request.get_json(silent=True) or {}
         item = catalog_item(str(payload.get("media_id") or ""))
+        if not item.get("width"):
+            raise ValueError("音频可以导入和预览；当前时间线仅支持视频片段")
         start = float(payload.get("start", 0))
         end = float(payload.get("end", item["duration"]))
         if start < 0 or end <= start or end > float(item["duration"]) + 0.04:

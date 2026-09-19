@@ -22,11 +22,23 @@ Uploaded media, the working project, the media catalog, exports, and the account
 | Area | Capabilities |
 | --- | --- |
 | Media pool | Upload video and audio through the browser. The server probes every file with FFmpeg; originals stay in the media library when timeline clips are removed. |
-| Timeline editing | DaVinci-inspired layout with the media pool on the left, the program monitor in the center, the clip inspector on the right, and video/audio tracks across the bottom. Trim points, captions, transitions, source-audio volume, drag-to-reorder, timeline zoom, and a resizable timeline. |
+| Timeline editing | Light three-column layout with the media pool on the left, the program monitor in the center, the clip inspector on the right, and video/audio tracks across the bottom. Trim points, captions, transitions, source-audio volume, drag-to-reorder, timeline zoom, and a resizable timeline. |
 | AI 导演 / AI Director | Pick source clips, a target duration, and an editing brief. Local mode analyzes scenes with FFmpeg and never uploads footage; cloud mode (when configured on the server) adds content analysis and narrative planning. Preview the shot list, apply it to the timeline, undo in one click. |
 | Accounts and AI service | Administrators create editors or other administrators, change roles, enable or disable access, reset passwords, and delete accounts, and connect the cloud AI service (URL, API key, models) with a connection test. Passwords are stored as one-way hashes; write requests use a session-bound CSRF token. |
 | Export | Portrait, landscape, and square MP4 presets using H.264/AAC, rendered asynchronously with preflight checks and output validation. |
-| Language | The **EN / 中文** button switches the whole interface; language and layout settings are remembered in the browser. |
+| Language | The **EN / 中文** control in the account menu switches the whole interface; language and layout settings are remembered in the browser. |
+
+## Clean web workspace
+
+![Light editor workspace with test media](docs/images/clean-editor.png)
+
+The light interface combines the editing layout of [OpenCut](https://github.com/OpenCut-app/opencut-classic) with the quiet file-list styling of [Square UI Files](https://github.com/zerostaticthemes/square-ui/tree/master/templates/files): a searchable media library, central source preview, clip settings, and a bottom timeline. These are visual references; the implementation uses the existing Flask templates and vanilla JavaScript, without adding a frontend build step or copying either project's source.
+
+Search filenames, filter by video/audio, or drop files into the media library. The **+** beside a video adds it to the timeline. Select a clip to trim it or add captions; transition and volume controls are under **转场与声音 / Transitions & audio**. Audio files can be imported and previewed, but the current web timeline only accepts video clips. The A1 row represents each video's source audio, not a separate audio-editing track. Source preview does not render captions or transitions; those are applied during MP4 export.
+
+Use the account menu at the top right for **EN / 中文**, account management, and sign-out. Drag clips or use their earlier/later buttons to reorder them. The horizontal divider and timeline zoom control support keyboard adjustment; language and layout settings are remembered in the browser. On narrow screens the preview, library, timeline, and clip settings stack vertically. Login and account management share the same light design.
+
+Importing a batch is all-or-nothing: validation or catalog-write failures remove that batch’s files and preserve previously imported media. An export continues if its progress dialog is closed; click Export again while it is running to reopen its progress.
 
 ## Make your first video
 
@@ -34,7 +46,7 @@ Uploaded media, the working project, the media catalog, exports, and the account
 2. **Ask the AI Director for a cut.** Click **AI 导演 / AI Director**, tick the source clips, set the target duration (5–180 seconds), describe what you want, and click **生成方案 / Generate Plan**. Local mode needs no API key.
 3. **Review the plan.** The panel lists every shot with its source, in/out points, caption, and reasoning, plus what applying it will change (which timeline clips are replaced, whether background music is kept). Click a shot to preview it in the program monitor.
 4. **Apply or discard.** **应用到时间线 / Apply to Timeline** replaces the video clips, saves the project to disk, and marks the new clips with an **AI** badge. **撤销应用 / Undo Apply** restores the previous timeline. Manual edits made after a plan was generated block applying it (HTTP 409), so a plan can never overwrite work it has not seen.
-5. **Refine, save, export.** Trim, caption, and reorder clips as usual, click **保存工程 / Save Project**, then **导出 MP4 / Export MP4**.
+5. **Refine, save, export.** Trim, caption, and reorder clips as usual, click **保存 / Save**, then **导出视频 / Export**.
 
 ## Optional cloud analysis
 
