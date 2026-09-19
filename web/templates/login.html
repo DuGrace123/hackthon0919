@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>灵剪 · 登录</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}">
+</head>
+<body>
+  <main class="auth-layout">
+    <section class="auth-showcase">
+      <div class="showcase-brand"><span>✦</span> 灵剪 <small>Web Studio</small></div>
+      <div class="showcase-copy">
+        <p class="eyebrow">SECURE WORKSPACE</p>
+        <h1 data-i18n="headline">你的本地智能剪辑工作区</h1>
+        <p data-i18n="subhead">项目、媒体和账户数据保存在本机。登录后即可继续剪辑。</p>
+      </div>
+      <div class="security-note"><span>◆</span><div><strong data-i18n="localData">本地数据</strong><p data-i18n="localDataHint">密码经过单向加密，账户保存于本地 SQLite 数据库。</p></div></div>
+    </section>
+
+    <section class="auth-panel">
+      <button id="languageToggle" class="language-toggle" type="button">EN</button>
+      <div class="auth-card">
+        <p class="eyebrow" id="formEyebrow">WELCOME BACK</p>
+        <h2 id="formTitle">登录灵剪</h2>
+        <p id="formDescription" class="form-description">输入账户信息以打开剪辑工作区。</p>
+        <div id="authBanner" class="auth-banner hidden" role="alert"></div>
+        <form id="authForm">
+          <label><span data-i18n="username">用户名</span><input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" required></label>
+          <label><span data-i18n="password">密码</span><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required></label>
+          <label id="confirmRow" class="hidden"><span data-i18n="confirmPassword">确认密码</span><input id="confirmPassword" name="confirm_password" type="password" autocomplete="new-password" minlength="8" maxlength="128"></label>
+          <button id="submitBtn" class="primary" type="submit">登录</button>
+        </form>
+        <p class="privacy" data-i18n="privacy">仅在可信设备上保持登录。关闭浏览器不会删除本地工程。</p>
+      </div>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='auth.js') }}"></script>
+</body>
+</html>
