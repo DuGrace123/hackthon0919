@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+.idea/
+.vscode/
+.DS_Store
+
+# Local builds and packaged binaries
+build/
+dist/
+*.spec
+*.exe
+*.zip
+
+# Large downloadable model and generated media
+models/*.onnx
+examples/
+*.mp4
+
+# Local projects, caches, and credentials
+*.lingjian.json
+*.autosave.json
+.env
+.env.*
