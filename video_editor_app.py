@@ -1,12 +1,14 @@
 from __future__ import annotations
-import copy,json,os,sys,subprocess,shutil,tempfile,hashlib
+import copy,json,os,sys,subprocess,shutil,tempfile,hashlib,threading
 from pathlib import Path
 from PySide6.QtCore import Qt,QUrl,QThread,Signal,QTimer,QStandardPaths,QSize,QSettings,QRectF,QPointF
 from PySide6.QtGui import QAction,QIcon,QPixmap,QKeySequence,QPalette,QColor,QPainter,QPen,QBrush
 from PySide6.QtWidgets import *
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from video_editing_engine import Project,Clip,OverlayClip,SFXCue,probe_media,validate_rendered_mp4,thumbnail,build_render_command,build_proxy_command,proxy_path,detect_scenes,scan_video_quality,quality_from_scan,VIDEO_EXT,AUDIO_EXT
+from video_editing_engine import Project,Clip,OverlayClip,SFXCue,probe_media,validate_rendered_mp4,thumbnail,build_render_command,build_proxy_command,proxy_path,detect_scenes,scan_video_quality,quality_from_scan,VIDEO_EXT,AUDIO_EXT,normalize_media_path
+import media_tasks
+from media_tasks import plan_import,import_media_batch,generate_proxy,render_export,run_ffmpeg_job,STATUS_OK,STATUS_CANCELLED
 from multitrack_timeline import TimelineCanvas,MediaList
 from ai_story_planner import APIConfig,analyze_video,plan_sequence,protect_secret,unprotect_secret
 from editing_preferences import learn_profile,profile_prompt,profile_summary
@@ -57,25 +59,26 @@ QStatusBar{background:#F8FAFC;color:#607086;border-top:1px solid #DCE4ED}
 QToolTip{background:#172033;color:white;border:1px solid #42506A;padding:6px;border-radius:6px}
 '''
 
-class MediaAnalyzeThread(QThread):
-    item=Signal(object);done=Signal();failed=Signal(str)
-    def __init__(self,paths,cache):super().__init__();self.paths=paths;self.cache=Path(cache)
-    def run(self):
-        self.cache.mkdir(parents=True,exist_ok=True)
-        for path in self.paths:
-            try:
-                meta=probe_media(FFMPEG,path);thumb=str(self.cache/(Path(path).stem+'-'+str(abs(hash(path)))+'.jpg'))
-                if not Path(thumb).exists():thumbnail(FFMPEG,path,thumb,min(2,meta['duration']*.25))
-                meta['thumbnail']=thumb;self.item.emit(meta)
-            except Exception as e:self.failed.emit(str(e))
-        self.done.emit()
+class CancellableThread(QThread):
+    """QThread with a cooperative cancel flag; never force-terminated."""
+    def __init__(self):super().__init__();self.cancel_event=threading.Event()
+    def cancel(self):self.cancel_event.set()
+    @property
+    def cancelled(self):return self.cancel_event.is_set()
 
-class ProxyThread(QThread):
-    done=Signal(str,str,bool,str)
-    def __init__(self,source,out):super().__init__();self.source=source;self.out=out
+class MediaAnalyzeThread(CancellableThread):
+    item=Signal(object);item_failed=Signal(str,str);progress=Signal(int,int,str);done=Signal(object)
+    def __init__(self,paths,cache):super().__init__();self.paths=list(paths);self.cache=Path(cache)
     def run(self):
-        Path(self.out).parent.mkdir(parents=True,exist_ok=True);p=subprocess.run(build_proxy_command(FFMPEG,self.source,self.out),capture_output=True,text=True,encoding='utf-8',errors='replace',creationflags=0x08000000 if os.name=='nt' else 0)
-        self.done.emit(self.source,self.out,p.returncode==0,(p.stderr or '')[-700:])
+        summary=import_media_batch(FFMPEG,self.paths,self.cache,cancel=self.cancel_event,on_progress=lambda i,n,name:self.progress.emit(i,n,name),on_item=lambda m:self.item.emit(m),on_error=lambda name,reason:self.item_failed.emit(name,reason))
+        self.done.emit(summary)
+
+class ProxyThread(CancellableThread):
+    progress=Signal(str,int);done=Signal(str,str,str,str)  # source, out, status, message
+    def __init__(self,source,out,duration=0.):super().__init__();self.source=source;self.out=out;self.duration=float(duration or 0)
+    def run(self):
+        result=generate_proxy(FFMPEG,self.source,self.out,duration=self.duration,cancel=self.cancel_event,on_progress=lambda v:self.progress.emit(self.source,v))
+        self.done.emit(self.source,self.out,result.status,result.message())
 
 class SceneThread(QThread):
     progress=Signal(int,str);done=Signal(object);failed=Signal(str)
@@ -107,16 +110,22 @@ class SceneThread(QThread):
             self.progress.emit(100,'深度初剪方案已生成，等待确认');self.done.emit({'analyses':analyses,'sequence':sequence})
         except Exception as e:self.failed.emit(str(e))
 
-class RenderThread(QThread):
-    progress=Signal(int);done=Signal(bool,str)
+class RenderThread(CancellableThread):
+    """Renders a preview command straight to its output (used for effect previews)."""
+    progress=Signal(int);done=Signal(bool,str);finished_status=Signal(str,str)
     def __init__(self,cmd,duration):super().__init__();self.cmd=cmd;self.duration=max(.1,duration)
     def run(self):
-        import re
-        p=subprocess.Popen(self.cmd,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace',creationflags=0x08000000 if os.name=='nt' else 0);tail=[]
-        for line in p.stderr:
-            tail=(tail+[line])[-30:];m=re.search(r'time=(\d+):(\d+):(\d+(?:\.\d+)?)',line)
-            if m:self.progress.emit(min(99,int((int(m[1])*3600+int(m[2])*60+float(m[3]))/self.duration*100)))
-        self.done.emit(p.wait()==0,''.join(tail)[-1600:])
+        result=run_ffmpeg_job(self.cmd,duration=self.duration,cancel=self.cancel_event,on_progress=self.progress.emit)
+        if not result.ok:media_tasks.remove_quietly(self.cmd[-1] if self.cmd else None)
+        self.finished_status.emit(result.status,result.message());self.done.emit(result.ok,result.message())
+
+class ExportThread(CancellableThread):
+    """Renders to a temp file beside the target, validates, then atomically publishes."""
+    progress=Signal(int);done=Signal(str,str,str)  # status, message, final path
+    def __init__(self,build_command,final,duration,expect_audio=True):super().__init__();self.build_command=build_command;self.final=final;self.duration=max(.1,duration);self.expect_audio=expect_audio
+    def run(self):
+        result=render_export(FFMPEG,self.build_command,self.final,duration=self.duration,expect_audio=self.expect_audio,cancel=self.cancel_event,on_progress=self.progress.emit)
+        self.done.emit(result.status,result.message(),self.final)
 
 class CloudAIThread(QThread):
     progress=Signal(int,str);done=Signal(object);failed=Signal(str)
@@ -174,7 +183,7 @@ class MaskGuide(QWidget):
 
 class Main(QMainWindow):
     def __init__(self):
-        super().__init__();self.project=Project();self.metas={};self.media_items={};self.thumbs={};self.proxies={};self.proxy_queue=[];self.proxy_thread=None;self.analyze_thread=None;self.scene_thread=None;self.cloud_thread=None;self.render_thread=None;self.effect_thread=None;self.person_thread=None;self.sfx_player=None;self.sfx_audio=None;self.current_clip=-1;self.history=[];self.redo_history=[];self._trim_snapshot=False;self.project_path='';self.pending_position=None;self.pending_autoplay=False;self.source_path='';self.source_in=0.;self.source_out=0.;self.settings=QSettings('LingJianAI','Editor');self.editing_profile=self.load_editing_profile()
+        super().__init__();self.project=Project();self.metas={};self.media_items={};self.thumbs={};self.proxies={};self.proxy_queue=[];self.proxy_thread=None;self.proxy_states={};self.proxy_failures={};self.analyze_thread=None;self.importing=set();self.import_failures=[];self.pending_imports=[];self.scene_thread=None;self.cloud_thread=None;self.render_thread=None;self.effect_thread=None;self.person_thread=None;self.sfx_player=None;self.sfx_audio=None;self.current_clip=-1;self.history=[];self.redo_history=[];self._trim_snapshot=False;self.project_path='';self.pending_position=None;self.pending_autoplay=False;self.source_path='';self.source_in=0.;self.source_out=0.;self.settings=QSettings('LingJianAI','Editor');self.editing_profile=self.load_editing_profile()
         self.cache=Path(QStandardPaths.writableLocation(QStandardPaths.CacheLocation) or tempfile.gettempdir())/'LingJianAI';self.cache.mkdir(parents=True,exist_ok=True);self.autosave=self.cache/'autosave.ljproject'
         self.setWindowTitle('灵剪 AI 视频编辑器 4.13 · 全片创意导演');self.resize(1760,1000);self.setMinimumSize(1280,800);self.build();self.load_api_settings();self.bind_shortcuts();self.timeline.set_project(self.project);self.statusBar().showMessage('就绪 · AI 会分析全片事件并自动安排字幕、动效、音效和音乐');self.auto_timer=QTimer(self);self.auto_timer.timeout.connect(self.auto_save);self.auto_timer.start(30000)
     def btn(self,text,fn,primary=False):
@@ -186,7 +195,7 @@ class Main(QMainWindow):
         top_card=QFrame();top_card.setObjectName('topGlass');top=QHBoxLayout(top_card);top.setContentsMargins(15,9,12,9);brand=QLabel('<b style="font-size:20px;color:#1769C2">✦ 灵剪</b> <span style="color:#6C7A90">AI Studio</span>');brand.setToolTip('可审计、可撤销、可验证的 AI 视频编辑器');top.addWidget(brand);self.title=QLineEdit('未命名作品');self.title.setMaximumWidth(270);self.title.setPlaceholderText('给作品起个名字');top.addWidget(self.title);self.mode_chip=QLabel('4.13 · 全片创意导演');self.mode_chip.setObjectName('statusChip');top.addWidget(self.mode_chip);top.addStretch();self.undo_btn=self.btn('↶  撤销',self.undo);self.undo_btn.setToolTip('撤销上一步 · Ctrl+Z');self.redo_btn=self.btn('↷  重做',self.redo);self.redo_btn.setToolTip('重做上一步 · Ctrl+Y');top.addWidget(self.undo_btn);top.addWidget(self.redo_btn);open_btn=self.btn('⌂  打开工程',self.open_project);open_btn.setToolTip('打开 .ljproject 工程');save_btn=self.btn('⌁  保存',self.save_project);save_btn.setToolTip('保存工程 · Ctrl+S');top.addWidget(open_btn);top.addWidget(save_btn);export_top=self.btn('↑  导出',self.export,True);export_top.setToolTip('导出兼容 MP4');top.addWidget(export_top);outer.addWidget(top_card)
         self.notice=QLabel('<b style="color:#1769C2">1  导入素材</b>　›　<b>2  选择片段</b>　›　<b>3  AI 方案 / 手动精剪</b>　›　<b>4  质量检查</b>　›　<b>5  导出</b>');self.notice.setObjectName('stepGuide');outer.addWidget(self.notice)
         main=QSplitter(Qt.Horizontal);outer.addWidget(main,1)
-        left=QFrame();left.setObjectName('glassCard');ll=QVBoxLayout(left);ll.setContentsMargins(12,11,12,12);head=QHBoxLayout();head.addWidget(QLabel('<b style="font-size:15px">素材库</b>'));head.addStretch();import_btn=self.btn('＋ 导入',self.import_files,True);import_btn.setToolTip('导入视频或音频素材');head.addWidget(import_btn);ll.addLayout(head);self.search=QLineEdit();self.search.setPlaceholderText('⌕  搜索素材');self.search.textChanged.connect(self.filter_media);ll.addWidget(self.search);self.media=MediaList();self.media.itemDoubleClicked.connect(lambda _:self.add_selected_media());ll.addWidget(self.media,1);self.media_info=QLabel('MP4 · MOV · MKV · 音频\nHEVC 10-bit 自动创建流畅代理');self.media_info.setStyleSheet('color:#7B8798;padding:4px');ll.addWidget(self.media_info);add_timeline=self.btn('＋  添加到时间线',self.add_selected_media,True);add_timeline.setToolTip('把选中素材追加到时间线');ll.addWidget(add_timeline);main.addWidget(left)
+        left=QFrame();left.setObjectName('glassCard');ll=QVBoxLayout(left);ll.setContentsMargins(12,11,12,12);head=QHBoxLayout();head.addWidget(QLabel('<b style="font-size:15px">素材库</b>'));head.addStretch();import_btn=self.btn('＋ 导入',self.import_files,True);import_btn.setToolTip('导入视频或音频素材');head.addWidget(import_btn);self.import_cancel_btn=self.btn('取消导入',self.cancel_import);self.import_cancel_btn.setToolTip('停止分析剩余文件');self.import_cancel_btn.hide();head.addWidget(self.import_cancel_btn);ll.addLayout(head);self.import_progress=QProgressBar();self.import_progress.setFormat('%p% · 正在分析');self.import_progress.hide();ll.addWidget(self.import_progress);self.search=QLineEdit();self.search.setPlaceholderText('⌕  搜索素材');self.search.textChanged.connect(self.filter_media);ll.addWidget(self.search);self.media=MediaList();self.media.itemDoubleClicked.connect(lambda _:self.add_selected_media());ll.addWidget(self.media,1);self.media_info=QLabel('MP4 · MOV · MKV · 音频\nHEVC 10-bit 自动创建流畅代理');self.media_info.setStyleSheet('color:#7B8798;padding:4px');ll.addWidget(self.media_info);proxy_row=QHBoxLayout();self.proxy_status=QLabel('');self.proxy_status.setStyleSheet('color:#5D697C;padding:2px');self.proxy_status.setWordWrap(True);proxy_row.addWidget(self.proxy_status,1);self.proxy_cancel_btn=self.btn('取消代理',self.cancel_proxies);self.proxy_cancel_btn.setToolTip('停止当前代理生成并清空排队');self.proxy_cancel_btn.hide();proxy_row.addWidget(self.proxy_cancel_btn);ll.addLayout(proxy_row);self.import_report_btn=self.btn('查看导入失败详情',self.show_import_failures);self.import_report_btn.hide();ll.addWidget(self.import_report_btn);add_timeline=self.btn('＋  添加到时间线',self.add_selected_media,True);add_timeline.setToolTip('把选中素材追加到时间线');ll.addWidget(add_timeline);main.addWidget(left)
         center=QFrame();center.setObjectName('mainStage');cl=QVBoxLayout(center);cl.setContentsMargins(9,8,9,8);self.vertical_workspace=QSplitter(Qt.Vertical);self.vertical_workspace.setChildrenCollapsible(False);cl.addWidget(self.vertical_workspace,1);preview_area=QWidget();preview_layout=QVBoxLayout(preview_area);preview_layout.setContentsMargins(0,0,0,0);preview_layout.setSpacing(5);monitors=QSplitter(Qt.Horizontal)
         source_box=QGroupBox('源监视器 · 素材审片与入/出点');sv=QVBoxLayout(source_box);self.source_video=QVideoWidget();self.source_video.setMinimumHeight(145);self.source_video.setStyleSheet('background:#020306');sv.addWidget(self.source_video,1);source_ctl=QHBoxLayout();self.source_time=QLabel('00:00:00:00');source_ctl.addWidget(self.btn('◀ 1帧',lambda:self.source_nudge(-1)));source_ctl.addWidget(self.btn('▶/暂停',self.source_play));source_ctl.addWidget(self.btn('1帧 ▶',lambda:self.source_nudge(1)));source_ctl.addWidget(self.source_time);source_ctl.addStretch();source_ctl.addWidget(self.btn('[ 设入点  I',self.mark_in));source_ctl.addWidget(self.btn('设出点  O ]',self.mark_out));sv.addLayout(source_ctl);source_edit=QHBoxLayout();self.mark_label=QLabel('入点 --  出点 --');source_edit.addWidget(self.mark_label);source_edit.addStretch();source_edit.addWidget(self.btn('插入时间线  F9',self.insert_source,True));source_edit.addWidget(self.btn('覆盖选中片段  F10',self.overwrite_source));sv.addLayout(source_edit);monitors.addWidget(source_box)
         preview_box=QGroupBox('节目监视器 · 时间线输出');pv=QVBoxLayout(preview_box);pv.setContentsMargins(5,12,5,5);self.video=QVideoWidget();self.video.setMinimumHeight(145);self.video.setStyleSheet('background:#030407');self.placeholder=QLabel('选择时间线片段开始节目预览');self.placeholder.setAlignment(Qt.AlignCenter);self.placeholder.setStyleSheet('background:#06080c;color:#747d90;border:1px dashed #303746');self.preview_stack=QStackedLayout();self.preview_stack.addWidget(self.placeholder);self.preview_stack.addWidget(self.video);pv.addLayout(self.preview_stack);monitors.addWidget(preview_box);monitors.setSizes([500,500]);preview_layout.addWidget(monitors,1)
@@ -202,7 +211,7 @@ class Main(QMainWindow):
         mask=QScrollArea();mask.setWidgetResizable(True);mask.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff);mask_body=QWidget();mask.setWidget(mask_body);ml=QVBoxLayout(mask_body);ml.setContentsMargins(12,12,12,12);mask_intro=QLabel('<b style="font-size:15px;color:#1769C2">先选用途，不需要理解参数</b><br><span style="color:#6F7C8F">软件会给出适合的形状、位置、大小与羽化；再在下方示意画面中拖动蓝点即可。</span>');mask_intro.setWordWrap(True);mask_intro.setStyleSheet('background:#EDF6FF;border:1px solid #D5E9FF;border-radius:10px;padding:10px');ml.addWidget(mask_intro);preset_box=QGroupBox('一键智能预设');preset_grid=QGridLayout(preset_box);preset_grid.addWidget(self.btn('✦  自动推荐',self.smart_mask,True),0,0,1,2);preset_grid.addWidget(self.btn('人物聚焦',lambda:self.apply_mask_preset('person')),1,0);preset_grid.addWidget(self.btn('美食 / 商品',lambda:self.apply_mask_preset('product')),1,1);preset_grid.addWidget(self.btn('口播卡片',lambda:self.apply_mask_preset('card')),2,0);preset_grid.addWidget(self.btn('电影感遮幅',lambda:self.apply_mask_preset('cinema')),2,1);ml.addWidget(preset_box);self.mask_guide=MaskGuide();self.mask_guide.positionChanged.connect(self.mask_position_changed);ml.addWidget(self.mask_guide);self.mask_help=QLabel('请选择一个用途预设。');self.mask_help.setWordWrap(True);self.mask_help.setStyleSheet('color:#536176;background:#F6F8FB;border-radius:9px;padding:8px');ml.addWidget(self.mask_help);advanced=QGroupBox('微调（可选）');mf2=QFormLayout(advanced);self.mask_shape=QComboBox();[(self.mask_shape.addItem(n,v)) for n,v in [('关闭蒙版','none'),('圆形人物聚焦','spotlight'),('椭圆主体聚焦','ellipse'),('口播画中画卡片','portrait_card'),('电影宽银幕','cinema')]];self.mask_x=QDoubleSpinBox();self.mask_y=QDoubleSpinBox();self.mask_width=QDoubleSpinBox();self.mask_height=QDoubleSpinBox();self.mask_opacity=QDoubleSpinBox();[x.setRange(0,1) for x in (self.mask_x,self.mask_y,self.mask_width,self.mask_height,self.mask_opacity)];[x.setSingleStep(.05) for x in (self.mask_x,self.mask_y,self.mask_width,self.mask_height,self.mask_opacity)];[x.setDecimals(2) for x in (self.mask_x,self.mask_y,self.mask_width,self.mask_height,self.mask_opacity)];self.mask_x.setValue(.5);self.mask_y.setValue(.5);self.mask_width.setValue(.72);self.mask_height.setValue(.72);self.mask_opacity.setValue(1);self.mask_feather=QDoubleSpinBox();self.mask_feather.setRange(1,120);self.mask_feather.setValue(28);mf2.addRow('效果类型',self.mask_shape);mf2.addRow('左右位置',self.mask_x);mf2.addRow('上下位置',self.mask_y);mf2.addRow('区域宽度',self.mask_width);mf2.addRow('区域高度',self.mask_height);mf2.addRow('边缘柔和',self.mask_feather);mf2.addRow('主体清晰度',self.mask_opacity);ml.addWidget(advanced);[x.valueChanged.connect(self.update_mask_guide) for x in (self.mask_x,self.mask_y,self.mask_width,self.mask_height)];self.mask_shape.currentIndexChanged.connect(self.update_mask_guide);ml.addWidget(self.btn('▶  应用并生成真实效果预览',self.apply_and_preview_mask,True));mask_actions=QHBoxLayout();mask_actions.addWidget(self.btn('应用到全部片段',self.apply_mask_all));mask_actions.addWidget(self.btn('关闭蒙版',self.reset_mask));ml.addLayout(mask_actions);ml.addStretch();right.addTab(mask,'智能蒙版')
         ai=QWidget();al=QVBoxLayout(ai);self.prompt=QTextEdit('请输出一个叙事完整的成片：建立人物和目标，保留动作因果，删除重复与无效画面，生成忠实字幕，并根据段落选择克制的转场。');self.prompt.setMaximumHeight(120);al.addWidget(QLabel('告诉 AI 你想讲什么故事'));al.addWidget(self.prompt);f=QFormLayout();self.story_style=QComboBox();self.story_style.addItems(['旅行叙事 · 目标—障碍—发现—回收','美食教程 · 成品钩子后严格按步骤','生活记录 · 小目标与阶段性回报','剧情短片 · 冲突—尝试—反转—回收','纪录片 · 尊重事件顺序与完整语义','电影感 · 克制转场与留白','口播知识 · 语义优先并删除停顿']);f.addRow('导演风格',self.story_style);self.opening_style=QComboBox();[(self.opening_style.addItem(name,value)) for name,value in opening_preset_choices()];self.opening_style.setToolTip('无需设置蒙版参数；AI 会把所选开篇自动编排到前 3 个镜头，并在方案预览中逐镜头说明。');f.addRow('高级开篇',self.opening_style);self.target=QSpinBox();self.target.setRange(5,600);self.target.setValue(60);f.addRow('目标时长（秒）',self.target);al.addLayout(f);opening_note=QLabel('✦ 生成方案时同时安排开场蒙版、画中画/撕裂/分屏转场与标题节奏；预览中可一键换整套开头，不需要手动调蒙版参数。');opening_note.setWordWrap(True);opening_note.setStyleSheet('color:#1769C2;background:#EDF6FF;border:1px solid #D5E9FF;border-radius:10px;padding:9px');al.addWidget(opening_note);self.cloud_btn=self.btn('✦ 生成完整方案并预览高级开头',self.cloud_ai,True);al.addWidget(self.cloud_btn);self.deep_btn=self.btn('离线分析并预览完整方案',self.deep_ai);al.addWidget(self.deep_btn);al.addWidget(self.btn('快速节奏方案',self.quick_ai));al.addWidget(self.btn('检查当前时间线',self.inspect_timeline));al.addWidget(self.btn('学习当前人工时间线',lambda:self.learn_current_order(True)));self.profile_status=QLabel(profile_summary(self.editing_profile));self.profile_status.setWordWrap(True);self.profile_status.setStyleSheet('color:#9fc7ff');al.addWidget(self.profile_status);self.ai_progress=QProgressBar();self.ai_progress.hide();al.addWidget(self.ai_progress);self.ai_status=QLabel('AI 方案预览会明确列出每个开篇镜头的蒙版、转场和用途；应用后仍可逐段微调，并可用 Ctrl+Z 整体撤销。');self.ai_status.setWordWrap(True);self.ai_status.setStyleSheet('color:#858da0');al.addWidget(self.ai_status);al.addStretch();right.addTab(ai,'AI 导演')
         api=QWidget();apl=QVBoxLayout(api);api_box=QGroupBox('OpenAI / Responses 兼容接口');apf=QFormLayout(api_box);self.api_url=QLineEdit('https://api.openai.com');self.api_key=QLineEdit();self.api_key.setEchoMode(QLineEdit.Password);self.api_key.setPlaceholderText('API Key 由 Windows DPAPI 加密保存');self.api_model=QLineEdit('gpt-5-mini');self.api_transcribe=QLineEdit('gpt-4o-mini-transcribe');apf.addRow('接口地址',self.api_url);apf.addRow('API Key',self.api_key);apf.addRow('视觉模型',self.api_model);apf.addRow('转写模型',self.api_transcribe);apl.addWidget(api_box);apl.addWidget(self.btn('加密保存接口设置',self.save_api_settings,True));self.api_note=QLabel('密钥只保存在当前 Windows 用户的加密配置中，不写入工程文件。兼容接口需要支持 /v1/responses 与 /v1/audio/transcriptions。');self.api_note.setWordWrap(True);self.api_note.setStyleSheet('color:#858da0');apl.addWidget(self.api_note);apl.addStretch();right.addTab(api,'AI 接口')
-        out=QScrollArea();out.setWidgetResizable(True);out_body=QWidget();out.setWidget(out_body);ol=QVBoxLayout(out_body);music=QGroupBox('背景音乐');mf=QFormLayout(music);self.bgm=QLineEdit();self.bgm.setReadOnly(True);self.bgm.setPlaceholderText('未选择');mf.addRow(self.bgm,self.btn('选择',self.choose_bgm));self.bgm_volume=QDoubleSpinBox();self.bgm_volume.setRange(0,1);self.bgm_volume.setSingleStep(.05);self.bgm_volume.setValue(.22);mf.addRow('音乐音量',self.bgm_volume);ol.addWidget(music);sfx_box=QGroupBox('音效库 · 10 个本地原创声音');sfx_layout=QVBoxLayout(sfx_box);self.sfx_combo=QComboBox();[(self.sfx_combo.addItem(f'{x["category"]} · {x["name"]}',x['id'])) for x in SFX_LIBRARY];sfx_layout.addWidget(self.sfx_combo);sfx_controls=QHBoxLayout();sfx_controls.addWidget(self.btn('▶ 试听',self.preview_sfx));self.sfx_volume=QDoubleSpinBox();self.sfx_volume.setRange(0,1.5);self.sfx_volume.setSingleStep(.05);self.sfx_volume.setValue(.65);self.sfx_volume.setPrefix('音量 ');sfx_controls.addWidget(self.sfx_volume);sfx_controls.addWidget(self.btn('＋ 加到播放头',self.add_sfx_at_playhead,True));sfx_layout.addLayout(sfx_controls);self.sfx_list=QListWidget();self.sfx_list.setMaximumHeight(118);sfx_layout.addWidget(self.sfx_list);sfx_layout.addWidget(self.btn('删除选中音效',self.remove_sfx));sfx_note=QLabel('AI 高级开篇会自动匹配音效；手动添加时使用时间线红色播放头位置。音效只参与成片混音，不改写原素材。');sfx_note.setWordWrap(True);sfx_note.setStyleSheet('color:#6F7C8F');sfx_layout.addWidget(sfx_note);ol.addWidget(sfx_box);export_box=QGroupBox('导出设置');ef=QFormLayout(export_box);self.preset=QComboBox();self.preset.addItem('竖屏 720×1280 · 标准',(720,1280,'standard'));self.preset.addItem('竖屏 1080×1920 · 高质量',(1080,1920,'high'));self.preset.addItem('横屏 1280×720 · 标准',(1280,720,'standard'));self.preset.addItem('横屏 1920×1080 · 高质量',(1920,1080,'high'));self.preset.addItem('方形 1080×1080 · 高质量',(1080,1080,'high'));ef.addRow('输出预设',self.preset);ol.addWidget(export_box);ol.addWidget(self.btn('导出前质量检查',self.inspect_timeline));ol.addWidget(self.btn('导出 MP4',self.export,True));self.render_progress=QProgressBar();self.render_progress.hide();ol.addWidget(self.render_progress);self.render_status=QLabel('导出前检查素材、顺序、字幕可读性、转场比例、音效、磁盘空间和 H.264/AAC 兼容性。');self.render_status.setWordWrap(True);ol.addWidget(self.render_status);ol.addStretch();right.addTab(out,'音频与导出');layers=QWidget();ll=QVBoxLayout(layers);layer_intro=QLabel('<b>AI 会按开场复杂度自动创建 V2/V3</b><br>每条叠加轨都有独立时间、位置、尺寸、透明度和蒙版；也可手工把当前片段放到播放头。');layer_intro.setWordWrap(True);layer_intro.setStyleSheet('color:#1769C2;background:#EDF6FF;border-radius:10px;padding:10px');ll.addWidget(layer_intro);self.overlay_list=QListWidget();self.overlay_list.currentItemChanged.connect(self.overlay_selected);ll.addWidget(self.overlay_list,1);lf=QFormLayout();self.overlay_track=QComboBox();[(self.overlay_track.addItem(f'V{i}',i)) for i in range(2,7)];self.overlay_layout=QComboBox();[(self.overlay_layout.addItem(n,v)) for n,v in [('右上画中画','pip_right'),('左上画中画','pip_left'),('画面中央','center'),('铺满画面','full')]];self.overlay_mask=QComboBox();[(self.overlay_mask.addItem(n,v)) for n,v in [('椭圆柔边','ellipse'),('圆形柔边','circle'),('矩形','none')]];self.overlay_opacity=QDoubleSpinBox();self.overlay_opacity.setRange(.05,1);self.overlay_opacity.setSingleStep(.05);self.overlay_opacity.setValue(.96);self.overlay_time=QDoubleSpinBox();self.overlay_time.setRange(0,86400);self.overlay_time.setDecimals(2);self.overlay_duration=QDoubleSpinBox();self.overlay_duration.setRange(.10,60);self.overlay_duration.setValue(2.5);self.overlay_duration.setDecimals(2);lf.addRow('目标轨道',self.overlay_track);lf.addRow('时间线位置',self.overlay_time);lf.addRow('持续时间',self.overlay_duration);lf.addRow('画面布局',self.overlay_layout);lf.addRow('蒙版',self.overlay_mask);lf.addRow('透明度',self.overlay_opacity);ll.addLayout(lf);ll.addWidget(self.btn('＋ 把当前片段添加到播放头',self.add_overlay_at_playhead,True));layer_actions=QHBoxLayout();layer_actions.addWidget(self.btn('更新选中叠加层',self.update_selected_overlay));layer_actions.addWidget(self.btn('删除叠加层',self.remove_selected_overlay));ll.addLayout(layer_actions);ll.addStretch();right.addTab(layers,'多轨合成');main.setSizes([285,930,350])
+        out=QScrollArea();out.setWidgetResizable(True);out_body=QWidget();out.setWidget(out_body);ol=QVBoxLayout(out_body);music=QGroupBox('背景音乐');mf=QFormLayout(music);self.bgm=QLineEdit();self.bgm.setReadOnly(True);self.bgm.setPlaceholderText('未选择');mf.addRow(self.bgm,self.btn('选择',self.choose_bgm));self.bgm_volume=QDoubleSpinBox();self.bgm_volume.setRange(0,1);self.bgm_volume.setSingleStep(.05);self.bgm_volume.setValue(.22);mf.addRow('音乐音量',self.bgm_volume);ol.addWidget(music);sfx_box=QGroupBox('音效库 · 10 个本地原创声音');sfx_layout=QVBoxLayout(sfx_box);self.sfx_combo=QComboBox();[(self.sfx_combo.addItem(f'{x["category"]} · {x["name"]}',x['id'])) for x in SFX_LIBRARY];sfx_layout.addWidget(self.sfx_combo);sfx_controls=QHBoxLayout();sfx_controls.addWidget(self.btn('▶ 试听',self.preview_sfx));self.sfx_volume=QDoubleSpinBox();self.sfx_volume.setRange(0,1.5);self.sfx_volume.setSingleStep(.05);self.sfx_volume.setValue(.65);self.sfx_volume.setPrefix('音量 ');sfx_controls.addWidget(self.sfx_volume);sfx_controls.addWidget(self.btn('＋ 加到播放头',self.add_sfx_at_playhead,True));sfx_layout.addLayout(sfx_controls);self.sfx_list=QListWidget();self.sfx_list.setMaximumHeight(118);sfx_layout.addWidget(self.sfx_list);sfx_layout.addWidget(self.btn('删除选中音效',self.remove_sfx));sfx_note=QLabel('AI 高级开篇会自动匹配音效；手动添加时使用时间线红色播放头位置。音效只参与成片混音，不改写原素材。');sfx_note.setWordWrap(True);sfx_note.setStyleSheet('color:#6F7C8F');sfx_layout.addWidget(sfx_note);ol.addWidget(sfx_box);export_box=QGroupBox('导出设置');ef=QFormLayout(export_box);self.preset=QComboBox();self.preset.addItem('竖屏 720×1280 · 标准',(720,1280,'standard'));self.preset.addItem('竖屏 1080×1920 · 高质量',(1080,1920,'high'));self.preset.addItem('横屏 1280×720 · 标准',(1280,720,'standard'));self.preset.addItem('横屏 1920×1080 · 高质量',(1920,1080,'high'));self.preset.addItem('方形 1080×1080 · 高质量',(1080,1080,'high'));ef.addRow('输出预设',self.preset);ol.addWidget(export_box);ol.addWidget(self.btn('导出前质量检查',self.inspect_timeline));ol.addWidget(self.btn('导出 MP4',self.export,True));self.render_progress=QProgressBar();self.render_progress.hide();ol.addWidget(self.render_progress);self.render_cancel_btn=self.btn('取消导出',self.cancel_export);self.render_cancel_btn.setObjectName('danger');self.render_cancel_btn.hide();ol.addWidget(self.render_cancel_btn);self.render_status=QLabel('导出前检查素材、顺序、字幕可读性、转场比例、音效、磁盘空间和 H.264/AAC 兼容性。');self.render_status.setWordWrap(True);ol.addWidget(self.render_status);ol.addStretch();right.addTab(out,'音频与导出');layers=QWidget();ll=QVBoxLayout(layers);layer_intro=QLabel('<b>AI 会按开场复杂度自动创建 V2/V3</b><br>每条叠加轨都有独立时间、位置、尺寸、透明度和蒙版；也可手工把当前片段放到播放头。');layer_intro.setWordWrap(True);layer_intro.setStyleSheet('color:#1769C2;background:#EDF6FF;border-radius:10px;padding:10px');ll.addWidget(layer_intro);self.overlay_list=QListWidget();self.overlay_list.currentItemChanged.connect(self.overlay_selected);ll.addWidget(self.overlay_list,1);lf=QFormLayout();self.overlay_track=QComboBox();[(self.overlay_track.addItem(f'V{i}',i)) for i in range(2,7)];self.overlay_layout=QComboBox();[(self.overlay_layout.addItem(n,v)) for n,v in [('右上画中画','pip_right'),('左上画中画','pip_left'),('画面中央','center'),('铺满画面','full')]];self.overlay_mask=QComboBox();[(self.overlay_mask.addItem(n,v)) for n,v in [('椭圆柔边','ellipse'),('圆形柔边','circle'),('矩形','none')]];self.overlay_opacity=QDoubleSpinBox();self.overlay_opacity.setRange(.05,1);self.overlay_opacity.setSingleStep(.05);self.overlay_opacity.setValue(.96);self.overlay_time=QDoubleSpinBox();self.overlay_time.setRange(0,86400);self.overlay_time.setDecimals(2);self.overlay_duration=QDoubleSpinBox();self.overlay_duration.setRange(.10,60);self.overlay_duration.setValue(2.5);self.overlay_duration.setDecimals(2);lf.addRow('目标轨道',self.overlay_track);lf.addRow('时间线位置',self.overlay_time);lf.addRow('持续时间',self.overlay_duration);lf.addRow('画面布局',self.overlay_layout);lf.addRow('蒙版',self.overlay_mask);lf.addRow('透明度',self.overlay_opacity);ll.addLayout(lf);ll.addWidget(self.btn('＋ 把当前片段添加到播放头',self.add_overlay_at_playhead,True));layer_actions=QHBoxLayout();layer_actions.addWidget(self.btn('更新选中叠加层',self.update_selected_overlay));layer_actions.addWidget(self.btn('删除叠加层',self.remove_selected_overlay));ll.addLayout(layer_actions);ll.addStretch();right.addTab(layers,'多轨合成');main.setSizes([285,930,350])
     def bind_shortcuts(self):
         for i,name in enumerate(('剪辑','字幕','转场','智能蒙版','AI','接口','导出')):
             if i<self.inspector.count():self.inspector.setTabText(i,name)
@@ -314,30 +323,83 @@ class Main(QMainWindow):
     def import_files(self):
         paths,_=QFileDialog.getOpenFileNames(self,'导入视频或音频','','媒体 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mp3 *.wav *.m4a *.aac *.flac *.ogg)')
         if paths:self.start_import(paths)
+    def known_media_keys(self):
+        keys={normalize_media_path(p) for p in self.metas}|set(self.importing)|{normalize_media_path(p) for p in self.pending_imports}
+        return keys
     def start_import(self,paths):
-        videos=[]
-        for p in paths:
-            if Path(p).suffix.lower() in AUDIO_EXT:self.project.bgm=p;self.bgm.setText(Path(p).name)
-            elif p not in self.metas:videos.append(p)
-        if not videos:return
-        self.notice.setText(f'正在读取 {len(videos)} 个素材的编码、时长和缩略图…');self.analyze_thread=MediaAnalyzeThread(videos,self.cache/'thumbs');self.analyze_thread.item.connect(self.media_ready);self.analyze_thread.failed.connect(lambda e:self.alert(e,True));self.analyze_thread.done.connect(self.import_done);self.analyze_thread.start()
+        plan=plan_import(paths,self.known_media_keys())
+        for p in plan.audios:self.project.bgm=p;self.bgm.setText(Path(p).name)
+        if plan.audios:self.statusBar().showMessage('背景音乐已设置：'+Path(plan.audios[-1]).name)
+        skipped=[]
+        if plan.duplicates:skipped.append(f'已跳过 {len(plan.duplicates)} 个重复素材')
+        if plan.rejected:
+            self.import_failures=[(name,reason) for name,reason in plan.rejected]+self.import_failures;self.import_failures=self.import_failures[:200];self.import_report_btn.show()
+            if not plan.videos:return self.alert('以下文件无法导入：\n\n'+'\n'.join(f'• {name}：{reason}' for name,reason in plan.rejected[:12])+('\n…' if len(plan.rejected)>12 else ''),True)
+            skipped.append(f'{len(plan.rejected)} 个文件未通过校验')
+        if not plan.videos:
+            if skipped:self.notice.setText('；'.join(skipped)+'。')
+            return
+        if self.analyze_thread and self.analyze_thread.isRunning():
+            self.pending_imports.extend(plan.videos);self.notice.setText(f'已排队 {len(plan.videos)} 个素材，等待当前导入完成…');return
+        self.launch_import(plan.videos,'；'.join(skipped))
+    def launch_import(self,videos,note=''):
+        self.importing={normalize_media_path(p) for p in videos}
+        self.import_progress.setRange(0,max(1,len(videos)));self.import_progress.setValue(0);self.import_progress.show();self.import_cancel_btn.show()
+        self.notice.setText((note+'；' if note else '')+f'正在读取 {len(videos)} 个素材的编码、时长和缩略图…')
+        self.analyze_thread=MediaAnalyzeThread(videos,self.cache/'thumbs');self.analyze_thread.item.connect(self.media_ready);self.analyze_thread.item_failed.connect(self.media_failed);self.analyze_thread.progress.connect(self.import_progress_changed);self.analyze_thread.done.connect(self.import_done);self.analyze_thread.start()
+    def cancel_import(self):
+        if self.analyze_thread and self.analyze_thread.isRunning():self.analyze_thread.cancel();self.import_cancel_btn.setEnabled(False);self.notice.setText('正在取消导入，当前文件分析完成后停止…')
+        self.pending_imports.clear()
+    def import_progress_changed(self,index,total,name):
+        self.import_progress.setRange(0,max(1,total));self.import_progress.setValue(index)
+        if name:self.import_progress.setFormat(f'%v/%m · {name}');self.statusBar().showMessage(f'正在分析 {index+1}/{total}：{name}')
+    def media_failed(self,name,reason):
+        self.import_failures=([(name,reason)]+self.import_failures)[:200];self.import_report_btn.show();self.statusBar().showMessage(f'导入失败：{name} · {reason}')
+    def show_import_failures(self):
+        if not self.import_failures:return self.alert('没有导入失败记录。')
+        self.alert('最近导入失败的文件：\n\n'+'\n'.join(f'• {name}：{reason}' for name,reason in self.import_failures[:40]),True)
     def media_ready(self,m):
+        if m['path'] in self.metas:return
         self.metas[m['path']]=m;pix=QPixmap(m['thumbnail']);self.thumbs[m['path']]=pix;item=QListWidgetItem(QIcon(pix),f"{m['name']}\n{m['duration']:.1f}s · {m['width']}×{m['height']} · {m['codec']}");item.setData(Qt.UserRole,m['path']);item.setToolTip(f"{m['codec']} · {m['fps']:.2f}fps · {'有声音' if m['has_audio'] else '无声音'}");self.media.addItem(item);self.media_items[m['path']]=item;self.timeline.set_thumbnails(self.thumbs)
         if m.get('needs_proxy'):
             out=proxy_path(str(self.cache/'proxies'),m['path'])
-            if Path(out).exists():self.proxies[m['path']]=out;item.setText(item.text()+'\n✓ 流畅代理已就绪')
-            else:self.proxy_queue.append((m['path'],out));item.setText(item.text()+'\n⏳ 等待生成流畅代理')
-    def import_done(self):self.notice.setText(f'已导入 {len(self.metas)} 个视频。可双击素材，或拖入时间线。');self.start_next_proxy()
+            if Path(out).exists() and Path(out).stat().st_size>0:self.proxies[m['path']]=out;self.proxy_states[m['path']]='done';item.setText(item.text()+'\n✓ 流畅代理已就绪')
+            elif m['path'] not in {src for src,_ in self.proxy_queue} and not (self.proxy_thread and self.proxy_thread.isRunning() and self.proxy_thread.source==m['path']):self.proxy_queue.append((m['path'],out));self.proxy_states[m['path']]='queued';item.setText(item.text()+'\n⏳ 排队等待流畅代理');self.refresh_proxy_status()
+    def import_done(self,summary):
+        self.importing=set();self.import_progress.hide();self.import_cancel_btn.hide();self.import_cancel_btn.setEnabled(True);self.analyze_thread=None
+        text=f'本次导入：{summary.text()}。素材库共 {len(self.metas)} 个视频。'
+        if summary.failed:text+=' 点击“查看导入失败详情”了解原因。'
+        self.notice.setText(text);self.statusBar().showMessage(text)
+        if summary.failed and not summary.cancelled and len(summary.failed)<=8:self.alert('部分文件未能导入：\n\n'+'\n'.join(f'• {name}：{reason}' for name,reason in summary.failed),True)
+        self.start_next_proxy()
+        if self.pending_imports:queued=[p for p in self.pending_imports if normalize_media_path(p) not in {normalize_media_path(k) for k in self.metas}];self.pending_imports=[];queued and self.launch_import(queued)
+    def refresh_proxy_status(self):
+        running=self.proxy_thread and self.proxy_thread.isRunning();queued=len(self.proxy_queue)
+        if running:name=Path(self.proxy_thread.source).name;self.proxy_status.setText(f'代理生成中：{name}'+(f' · 排队 {queued}' if queued else ''));self.proxy_cancel_btn.show()
+        elif queued:self.proxy_status.setText(f'排队等待代理：{queued} 个');self.proxy_cancel_btn.show()
+        else:self.proxy_status.setText('');self.proxy_cancel_btn.hide()
+    def set_proxy_state(self,src,state,percent=None):
+        labels={'queued':'⏳ 排队等待流畅代理','running':'⏳ 正在生成流畅代理','done':'✓ 流畅代理已就绪','failed':'⚠ 代理生成失败，使用原素材','cancelled':'⏹ 代理已取消，使用原素材'}
+        self.proxy_states[src]=state;item=self.media_items.get(src)
+        if item:
+            lines=item.text().split('\n')[:2];label=labels[state]+(f' {percent}%' if state=='running' and percent is not None else '');item.setText('\n'.join(lines+[label]))
     def start_next_proxy(self):
-        if self.proxy_thread and self.proxy_thread.isRunning() or not self.proxy_queue:return
-        src,out=self.proxy_queue.pop(0);self.notice.setText('正在后台生成流畅代理：'+Path(src).name);self.proxy_thread=ProxyThread(src,out);self.proxy_thread.done.connect(self.proxy_done);self.proxy_thread.start()
-    def proxy_done(self,src,out,ok,err):
-        item=self.media_items.get(src)
-        if ok:self.proxies[src]=out;item and item.setText(item.text().replace('⏳ 等待生成流畅代理','✓ 流畅代理已就绪'));self.notice.setText('代理生成完成：'+Path(src).name)
-        else:item and item.setText(item.text().replace('⏳ 等待生成流畅代理','⚠ 代理生成失败'));self.notice.setText('代理生成失败，可继续使用原素材')
-        if self.current_clip>=0 and self.project.clips[self.current_clip].path==src:self.load_clip(self.current_clip,False)
-        if self.source_path==src:
-            pos=self.source_player.position();self.source_player.setSource(QUrl.fromLocalFile(out));self.source_player.setPosition(pos)
+        if self.proxy_thread and self.proxy_thread.isRunning() or not self.proxy_queue:self.refresh_proxy_status();return
+        src,out=self.proxy_queue.pop(0);self.set_proxy_state(src,'running',0);self.proxy_thread=ProxyThread(src,out,self.metas.get(src,{}).get('duration',0));self.proxy_thread.progress.connect(self.proxy_progress);self.proxy_thread.done.connect(self.proxy_done);self.proxy_thread.start();self.refresh_proxy_status()
+    def proxy_progress(self,src,value):
+        self.set_proxy_state(src,'running',value);self.proxy_status.setText(f'代理生成中：{Path(src).name} · {value}%'+(f' · 排队 {len(self.proxy_queue)}' if self.proxy_queue else ''))
+    def cancel_proxies(self):
+        for src,_ in self.proxy_queue:self.set_proxy_state(src,'cancelled')
+        self.proxy_queue.clear()
+        if self.proxy_thread and self.proxy_thread.isRunning():self.proxy_thread.cancel();self.proxy_status.setText('正在停止代理生成…')
+        else:self.refresh_proxy_status()
+    def proxy_done(self,src,out,status,message):
+        if status==STATUS_OK and Path(out).exists():
+            self.proxies[src]=out;self.set_proxy_state(src,'done');self.statusBar().showMessage('代理生成完成：'+Path(src).name)
+            if self.current_clip>=0 and self.project.clips[self.current_clip].path==src:pos=self.player.position();playing=self.player.playbackState()==QMediaPlayer.PlayingState;self.load_clip(self.current_clip,playing,pos/1000)
+            if self.source_path==src:pos=self.source_player.position();self.source_player.setSource(QUrl.fromLocalFile(out));self.source_player.setPosition(pos)
+        elif status==STATUS_CANCELLED:self.proxies.pop(src,None);self.set_proxy_state(src,'cancelled');self.statusBar().showMessage('代理已取消：'+Path(src).name+'，将直接使用原素材预览')
+        else:self.proxies.pop(src,None);self.proxy_failures[src]=message;self.set_proxy_state(src,'failed');self.statusBar().showMessage('代理生成失败（已改用原素材预览）：'+Path(src).name+' · '+message[:120],12000)
         self.proxy_thread=None;self.start_next_proxy()
     def add_selected_media(self):
         item=self.media.currentItem()
@@ -406,7 +468,11 @@ class Main(QMainWindow):
         if self.current_clip<0:return self.player.position()/1000
         c=self.project.clips[self.current_clip];effect=str(getattr(c,'person_effect_path','') or '');base=float(getattr(c,'person_effect_start',0));valid=bool(effect and Path(effect).exists() and c.start>=base-.001 and c.end<=float(getattr(c,'person_effect_end',0))+.001);return self.player.position()/1000+(base if valid else 0)
     def player_error(self,error,msg):
-        if self.current_clip>=0 and self.project.clips[self.current_clip].path not in self.proxies:self.notice.setText('原素材预览失败，正在等待代理文件；导出不受影响。')
+        if self.current_clip>=0 and self.project.clips[self.current_clip].path not in self.proxies:
+            path=self.project.clips[self.current_clip].path;state=self.proxy_states.get(path,'')
+            if state in ('queued','running'):self.notice.setText('原素材预览失败，正在等待代理文件；导出不受影响。')
+            elif state in ('failed','cancelled'):self.notice.setText('原素材无法预览，代理'+('生成失败' if state=='failed' else '已取消')+'；可在素材库重新导入以重试代理，导出不受影响。')
+            else:self.notice.setText('原素材预览失败：'+msg+'；导出不受影响。')
         else:self.notice.setText('预览错误：'+msg)
     def apply_clip(self):
         if self.current_clip<0:return self.alert('请先在时间线上选择片段。')
@@ -608,7 +674,9 @@ class Main(QMainWindow):
         except Exception as e:return self.alert('效果预览失败：'+str(e),True)
         self.notice.setText('正在渲染字幕、转场和蒙版预览…');self.effect_thread=RenderThread(cmd,preview.duration);self.effect_thread.done.connect(lambda ok,msg:self.effect_preview_done(ok,msg,out,start));self.effect_thread.start()
     def effect_preview_done(self,ok,msg,out,start):
-        if not ok:return self.alert('效果预览渲染失败：'+msg,True)
+        if not ok:
+            if self.effect_thread and self.effect_thread.cancelled:return self.notice.setText('效果预览已取消')
+            return self.alert('效果预览渲染失败：'+msg,True)
         self.pending_position=int(start*1000);self.pending_autoplay=True;self.player.setSource(QUrl.fromLocalFile(out));self.preview_stack.setCurrentWidget(self.video);self.notice.setText('正在节目监视器播放渲染后的创作效果预览')
     def overlay_geometry(self,layout):
         return {'pip_right':(.76,.25,.36,.29),'pip_left':(.24,.25,.36,.29),'center':(.5,.5,.56,.42),'full':(.5,.5,1.,1.)}.get(layout,(.76,.25,.36,.29))
@@ -713,16 +781,27 @@ class Main(QMainWindow):
                 for c in render_project.clips:c.volume=0
             cmd=build_render_command(FFMPEG,render_project,p,w,h,q)
         except Exception as e:return self.alert(str(e),True)
-        self.render_progress.show();self.render_progress.setValue(0);self.render_status.setText('正在渲染，可继续查看界面，但不要关闭程序。');self.render_thread=RenderThread(cmd,self.project.duration);self.render_thread.progress.connect(self.render_progress.setValue);self.render_thread.done.connect(lambda ok,msg:self.export_done(ok,msg,p));self.render_thread.start()
-    def export_done(self,ok,msg,path):
-        if ok:
-            try:meta=validate_rendered_mp4(FFMPEG,path);msg=f'兼容性校验通过 · H.264/AAC · {meta["width"]}×{meta["height"]} · {meta["duration"]:.1f}秒'
-            except Exception as e:ok=False;msg='编码结束但兼容性校验失败：'+str(e)
-        self.render_progress.setValue(100 if ok else 0);self.render_status.setText(('导出完成并已校验：'+path) if ok else '导出失败，可查看错误详情。');self.alert(('导出完成：\n'+path+'\n\n'+msg) if ok else ('FFmpeg 导出失败：\n'+msg),not ok)
+        build=lambda temp_out:build_render_command(FFMPEG,render_project,temp_out,w,h,q)
+        self.render_progress.show();self.render_progress.setValue(0);self.render_cancel_btn.show();self.render_cancel_btn.setEnabled(True);self.render_status.setText('正在渲染到临时文件，完成校验后才会替换目标文件。可继续查看界面，但不要关闭程序。');self.render_thread=ExportThread(build,p,self.project.duration,expect_audio=True);self.render_thread.progress.connect(self.render_progress.setValue);self.render_thread.done.connect(self.export_done);self.render_thread.start()
+    def cancel_export(self):
+        if self.render_thread and self.render_thread.isRunning():self.render_thread.cancel();self.render_cancel_btn.setEnabled(False);self.render_status.setText('正在取消导出并清理临时文件…')
+    def export_done(self,status,msg,path):
+        ok=status==STATUS_OK;self.render_cancel_btn.hide();self.render_thread=None
+        if status==STATUS_CANCELLED:self.render_progress.setValue(0);self.render_progress.hide();self.render_status.setText('导出已取消，临时文件已清理，原有目标文件未改动。');self.statusBar().showMessage('导出已取消');return
+        self.render_progress.setValue(100 if ok else 0);self.render_status.setText(('导出完成并已校验：'+path) if ok else ('导出失败：'+msg[:200]));self.alert(('导出完成：\n'+path+'\n\n'+msg) if ok else ('导出失败，目标文件未被改动：\n'+msg),not ok)
+    def stop_background_tasks(self,wait_ms=8000):
+        """Cancel every media thread cooperatively, wait for it, and make sure no FFmpeg child survives."""
+        threads=[t for t in (self.analyze_thread,self.proxy_thread,self.render_thread,self.effect_thread) if t is not None]
+        self.proxy_queue.clear();self.pending_imports.clear()
+        for t in threads:
+            if isinstance(t,CancellableThread):t.cancel()
+        for t in threads:
+            if t.isRunning():t.wait(wait_ms)
+        media_tasks.REGISTRY.terminate_all()
     def closeEvent(self,e):
         if self.render_thread and self.render_thread.isRunning():
-            if QMessageBox.question(self,'正在导出','视频仍在导出，确定要退出吗？')!=QMessageBox.Yes:return e.ignore()
-        self.auto_save();e.accept()
+            if QMessageBox.question(self,'正在导出','视频仍在导出，退出将取消导出并清理临时文件。确定要退出吗？')!=QMessageBox.Yes:return e.ignore()
+        self.stop_background_tasks();self.player.stop();self.source_player.stop();self.auto_save();e.accept()
 
 if __name__=='__main__':
     if len(sys.argv)>=4 and sys.argv[1]=='--person-smoke':

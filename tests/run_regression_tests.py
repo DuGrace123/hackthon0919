@@ -18,6 +18,8 @@ PORTABLE_TESTS = [
     "test_editing_preferences.py",
     "test_long_form_ordering.py",
     "test_capture_chronology.py",
+    "test_project_store.py",
+    "test_backend_api.py",
 ]
 
 
