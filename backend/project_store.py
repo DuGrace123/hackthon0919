@@ -13,11 +13,15 @@ the project/clip structure; this module only adds the guarantees the store needs
 - revision, timestamps and a fingerprint of the body live in ``<id>.meta.json``;
   a file rewritten by another tool (the desktop app strips the envelope) is
   recognised by its changed fingerprint and counted as a newer revision;
+- the read-compare-write of a save runs under a cross-process file lock
+  (``<id>.lock``), so several uvicorn workers or app instances sharing one
+  workspace still let exactly one save per revision through;
 - project ids are server generated and strictly checked, and every path is
   resolved inside the workspace, so no request can reach files outside it.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -27,10 +31,17 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    import fcntl  # POSIX
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
 
 from video_editing_engine import Clip, OverlayClip, Project, SFXCue, atomic_write_text
 from edit_plan import ALLOWED_MASKS, ALLOWED_TRANSITIONS
@@ -41,8 +52,11 @@ SCHEMA_VERSION = 5
 PROJECT_SUFFIX = ".ljproject"
 BACKUP_SUFFIX = ".ljproject.bak"
 META_SUFFIX = ".meta.json"
+LOCK_SUFFIX = ".lock"
+LOCK_TIMEOUT = 30.0  # seconds to wait for another process's save before giving up
 MAX_MAGNITUDE = 1e15  # any numeric project field beyond this is nonsense and would not survive float formatting
 FILL_SEGMENT_KEYS = {"path", "start", "duration", "name"}
+_SURROGATES = re.compile("[\ud800-\udfff]")  # lone surrogates parse from JSON escapes but cannot be written as UTF-8
 ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 RATIO_PATTERN = re.compile(r"^\d+:\d+$")
 TITLE_MAX_CHARS = 120
@@ -121,6 +135,12 @@ class ProjectCorrupt(ProjectStoreError):
     status = 500
 
 
+class ProjectLocked(ProjectStoreError):
+    """Another process held the project's lock for longer than LOCK_TIMEOUT."""
+    code = "project_locked"
+    status = 503
+
+
 @dataclass
 class ProjectRecord:
     id: str
@@ -175,19 +195,73 @@ def _is_number(value) -> bool:
     return abs(value) <= MAX_MAGNITUDE
 
 
-def _check_finite(value, path: str, errors: list[dict]) -> None:
-    """Free-form structures (edit_plan, edit_log) must stay strict JSON: no NaN/Infinity anywhere inside."""
+def _safe_text(value) -> str:
+    """Make client-supplied text safe to echo inside an error response (drops lone surrogates)."""
+    return str(value).encode("utf-8", "replace").decode("utf-8")
+
+
+def _check_json_safe(value, path: str, errors: list[dict]) -> None:
+    """Everything stored must survive strict JSON and UTF-8: no NaN/Infinity, no lone surrogates, in keys or values."""
     if isinstance(value, bool):
         return
     if isinstance(value, (int, float)):
         if not _is_number(value):
             errors.append({"path": path, "message": "必须是有限数字"})
+    elif isinstance(value, str):
+        if _SURROGATES.search(value):
+            errors.append({"path": path, "message": "包含无效的 Unicode 字符"})
     elif isinstance(value, dict):
         for key, item in value.items():
-            _check_finite(item, f"{path}.{key}" if path else str(key), errors)
+            child = f"{path}.{_safe_text(key)}" if path else _safe_text(key)
+            if isinstance(key, str) and _SURROGATES.search(key):
+                errors.append({"path": child, "message": "字段名包含无效的 Unicode 字符"})
+            _check_json_safe(item, child, errors)
     elif isinstance(value, list):
         for i, item in enumerate(value):
-            _check_finite(item, f"{path}[{i}]", errors)
+            _check_json_safe(item, f"{path}[{i}]", errors)
+
+
+def _try_lock(fd: int) -> bool:
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock(fd: int) -> None:
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        else:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
+
+@contextlib.contextmanager
+def _exclusive_file_lock(path: Path, timeout: float = LOCK_TIMEOUT):
+    """Cross-process exclusive lock on ``path`` (flock on POSIX, byte-range lock on Windows).
+
+    The lock file is created on demand and never deleted while held: removing a lock file another
+    process may already have opened would hand out two independent locks.
+    """
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        deadline = time.monotonic() + timeout
+        while not _try_lock(fd):
+            if time.monotonic() >= deadline:
+                raise ProjectLocked("工程正被其他进程保存，等待锁超时，请稍后重试", lock=path.name)
+            time.sleep(0.01)
+        try:
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def project_version_token(record: ProjectRecord) -> str:
@@ -235,8 +309,8 @@ class _Checker:
             return self.fail(name, "必须是字符串")
         if required and not value.strip():
             return self.fail(name, "不能为空")
-        if "\x00" in value:
-            self.fail(name, "包含非法字符")
+        if "\x00" in value or _SURROGATES.search(value):
+            self.fail(name, "包含无效字符（控制字符或无效的 Unicode）")
         elif max_chars is not None and len(value) > max_chars:
             self.fail(name, f"最多 {max_chars} 个字符")
 
@@ -247,7 +321,7 @@ def _check_fields(prefix: str, data, cls, errors: list[dict], required: set[str]
         errors.append({"path": prefix, "message": "必须是 JSON 对象"})
         return False
     fields = {f.name: f for f in dataclasses.fields(cls)}
-    unknown = sorted(set(data) - set(fields))
+    unknown = sorted(_safe_text(k) for k in set(data) - set(fields))
     if unknown:
         errors.append({"path": prefix, "message": f"未知字段 {', '.join(unknown)}；允许的字段：{', '.join(fields)}"})
     # Unknown keys are reported but do not stop the semantic checks; missing or mistyped fields do.
@@ -276,7 +350,7 @@ def _check_fill_segment(prefix: str, segment, errors: list[dict]) -> None:
     if not isinstance(segment, dict):
         errors.append({"path": prefix, "message": "必须是 JSON 对象"})
         return
-    unknown = sorted(set(segment) - FILL_SEGMENT_KEYS)
+    unknown = sorted(_safe_text(k) for k in set(segment) - FILL_SEGMENT_KEYS)
     if unknown:
         errors.append({"path": prefix, "message": f"未知字段 {', '.join(unknown)}；允许的字段：{', '.join(sorted(FILL_SEGMENT_KEYS))}"})
     s = _Checker(prefix, segment, errors)
@@ -364,7 +438,7 @@ def validate_project_payload(data) -> dict:
         raise InvalidProject([{"path": "", "message": "工程必须是 JSON 对象"}])
     errors: list[dict] = []
     body = {k: v for k, v in data.items() if k not in ENVELOPE_KEYS}
-    unknown = sorted(set(body) - PROJECT_KEYS)
+    unknown = sorted(_safe_text(k) for k in set(body) - PROJECT_KEYS)
     if unknown:
         errors.append({"path": "", "message": f"未知字段 {', '.join(unknown)}；允许的字段：{', '.join(sorted(PROJECT_KEYS))}"})
     version = body.get("version", SCHEMA_VERSION)
@@ -388,11 +462,11 @@ def validate_project_payload(data) -> dict:
     if "edit_plan" in body and not isinstance(body["edit_plan"], dict):
         top.fail("edit_plan", "必须是 JSON 对象")
     else:
-        _check_finite(body.get("edit_plan", {}), "edit_plan", errors)
+        _check_json_safe(body.get("edit_plan", {}), "edit_plan", errors)
     if "edit_log" in body and not isinstance(body["edit_log"], list):
         top.fail("edit_log", "必须是列表")
     else:
-        _check_finite(body.get("edit_log", []), "edit_log", errors)
+        _check_json_safe(body.get("edit_log", []), "edit_log", errors)
     for key, (cls, required, check) in _ITEM_RULES.items():
         items = body.get(key, [])
         if not isinstance(items, list):
@@ -429,10 +503,14 @@ def validate_project_payload(data) -> dict:
     if errors:
         raise InvalidProject(errors)
     canonical = project.to_dict()
+    # Safety net over the full canonical structure: catches string fields that only had a type check above.
+    _check_json_safe(canonical, "", errors)
+    if errors:
+        raise InvalidProject(errors)
     try:
-        json.dumps(canonical, ensure_ascii=False, allow_nan=False)
+        json.dumps(canonical, ensure_ascii=False, allow_nan=False).encode("utf-8")
     except (TypeError, ValueError) as exc:
-        raise InvalidProject([{"path": "", "message": f"工程包含无法写成 JSON 的内容：{exc}"}])
+        raise InvalidProject([{"path": "", "message": f"工程包含无法写成 JSON 的内容：{_safe_text(exc)}"}])
     return canonical
 
 
@@ -453,7 +531,7 @@ class ProjectStore:
     # ---- boundary ----------------------------------------------------------------
     def _check_id(self, project_id) -> str:
         if not isinstance(project_id, str) or not ID_PATTERN.match(project_id):
-            raise InvalidProjectId("工程 ID 必须是 32 位小写十六进制字符串", project_id=str(project_id)[:64])
+            raise InvalidProjectId("工程 ID 必须是 32 位小写十六进制字符串", project_id=_safe_text(project_id)[:64])
         return project_id
 
     def _path(self, project_id: str, suffix: str = PROJECT_SUFFIX) -> Path:
@@ -463,9 +541,16 @@ class ProjectStore:
             raise InvalidProjectId("工程路径越界", project_id=project_id)
         return path
 
-    def _lock(self, project_id: str) -> threading.Lock:
+    def _thread_lock(self, project_id: str) -> threading.Lock:
         with self._locks_guard:
             return self._locks.setdefault(project_id, threading.Lock())
+
+    @contextlib.contextmanager
+    def _lock(self, project_id: str):
+        """Serialise read-compare-write per project: threads of this instance queue on a threading.Lock,
+        other instances and processes (uvicorn --workers, several apps on one workspace) on <id>.lock."""
+        with self._thread_lock(project_id), _exclusive_file_lock(self._path(project_id, LOCK_SUFFIX)):
+            yield
 
     # ---- file io ---------------------------------------------------------------------
     def _load_body(self, path: Path, project_id: str) -> tuple[dict, dict]:
@@ -612,3 +697,8 @@ class ProjectStore:
                 extra = self._path(project_id, suffix)
                 if extra.exists():
                     extra.unlink()
+        # Removed outside the locked region (Windows cannot unlink an open file); a leftover lock file is harmless.
+        try:
+            self._path(project_id, LOCK_SUFFIX).unlink()
+        except OSError:
+            pass

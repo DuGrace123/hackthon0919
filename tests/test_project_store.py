@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -18,6 +20,7 @@ from backend.project_store import (
     ProjectNotFound,
     ProjectStore,
     RevisionConflict,
+    _exclusive_file_lock,
     validate_project_payload,
 )
 from video_editing_engine import Clip, Project
@@ -102,6 +105,17 @@ class ValidationTests(unittest.TestCase):
             {"path": "b", "start": 0.5, "duration": 0.4, "name": "b"}]}]})
         self.assertEqual(clean["clips"][0]["title_fill_segments"][0]["duration"], 0.4)
 
+    def test_lone_surrogates_are_rejected_with_serialisable_errors(self):
+        errors = self.errors({"title": "\ud800", "typo\udc00": 1,
+                              "clips": [{"path": "a", "start": 0, "end": 1, "title_fill_segments": [{"path": "b\ud800"}]}],
+                              "edit_plan": {"bad\ud800": 1, "note": "x\udc00"}})
+        for path in ("title", "", "clips[0].title_fill_segments[0].path", "edit_plan.bad?", "edit_plan.note"):
+            self.assertIn(path, errors, errors)
+        # String fields that only get a type check are caught by the final walk over the canonical form.
+        self.assertIn("clips[0].caption_font", self.errors({"clips": [{"path": "a", "start": 0, "end": 1, "caption_font": "\udfff"}]}))
+        # The error report itself must be writable as UTF-8 JSON, or the 422 would turn into a 500.
+        json.dumps(errors, ensure_ascii=False).encode("utf-8")
+
     def test_old_desktop_version_is_upgraded(self):
         if not SAMPLE.exists():
             self.skipTest("sample project not present")
@@ -155,7 +169,7 @@ class ProjectStoreTests(unittest.TestCase):
         self.assertTrue(self.file(record.id, ".ljproject.bak").exists())
         self.assertEqual(json.loads(self.file(record.id, ".meta.json").read_text(encoding="utf-8"))["revision"], 3)
         self.store.delete(record.id)
-        for suffix in (".ljproject", ".ljproject.bak", ".meta.json"):
+        for suffix in (".ljproject", ".ljproject.bak", ".meta.json", ".lock"):
             self.assertFalse(self.file(record.id, suffix).exists(), suffix)
         with self.assertRaises(ProjectNotFound):
             self.store.get(record.id)
@@ -299,6 +313,43 @@ class ProjectStoreTests(unittest.TestCase):
         for t in threads:
             t.join()
         self.assertEqual(sorted(map(str, results)), ["2", "conflict"])
+        self.assertEqual(self.store.get(record.id).revision, 2)
+
+    def test_two_store_instances_on_one_workspace_cannot_both_win(self):
+        # Separate instances have separate in-memory locks, like two uvicorn workers; the file lock must serialise them.
+        record = self.store.create("多实例")
+        stores = [ProjectStore(self.tmp.name), ProjectStore(self.tmp.name)]
+        barrier = threading.Barrier(2)
+        results = []
+
+        def worker(store, title):
+            barrier.wait()
+            try:
+                results.append(store.save(record.id, sample_payload(title), 1).revision)
+            except RevisionConflict:
+                results.append("conflict")
+
+        threads = [threading.Thread(target=worker, args=(store, f"实例{i}")) for i, store in enumerate(stores)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sorted(map(str, results)), ["2", "conflict"])
+        self.assertEqual(self.store.get(record.id).revision, 2)
+
+    def test_file_lock_blocks_a_save_from_another_process(self):
+        record = self.store.create("跨进程")
+        script = ("import json, sys; from backend.project_store import ProjectStore; "
+                  "print(ProjectStore(sys.argv[1]).save(sys.argv[2], json.loads(sys.argv[3]), 1).revision)")
+        env = {**os.environ, "PYTHONPATH": str(ROOT)}
+        with _exclusive_file_lock(self.file(record.id, ".lock")):
+            child = subprocess.Popen([sys.executable, "-c", script, self.tmp.name, record.id, json.dumps(sample_payload("子进程"))],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                child.wait(timeout=1.5)  # still blocked on the lock this process holds
+        out, err = child.communicate(timeout=30)
+        self.assertEqual(child.returncode, 0, err)
+        self.assertEqual(out.strip(), "2")
         self.assertEqual(self.store.get(record.id).revision, 2)
 
 

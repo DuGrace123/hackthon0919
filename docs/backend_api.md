@@ -88,6 +88,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects -H 'Content-Type: application
 
 前端可以用 `detail.current` 重新加载，或者把本地改动合并到它之上后再保存（带 `revision: 2`）。服务器不会覆盖任何一方的改动。
 
+保存的"读取-比较-写入"全程持有该工程的跨进程文件锁 `<id>.lock`（POSIX `flock` / Windows 字节锁），所以 `uvicorn --workers N` 或多个服务实例共享同一个 workspace 时，同一 revision 也只会有一次保存成功。等锁超过 30 秒返回 **503** `project_locked`。
+
 ## 刷新后工程仍在
 
 工程只保存在服务器文件中，不依赖浏览器状态。建议前端在每次修改后防抖（例如 800 ms）调用 `PUT`，页面刷新后用 URL 中的工程 `id` 调用 `GET /projects/{id}` 即可恢复到最近一次保存。
@@ -122,7 +124,7 @@ revision、时间戳和工程内容的指纹保存在 `<id>.meta.json` 中，而
 }
 ```
 
-规则：未知字段拒绝；必填字段缺失拒绝；类型按定义检查（数字字段不接受布尔值和字符串）；数字必须是有限值（`NaN`、`Infinity`、`1e9999` 这类会解析成无穷的字面量，以及绝对值超过 1e15 的数都拒绝），`edit_plan` / `edit_log` 内部嵌套的数字同样如此；枚举字段只接受下表列出的值；`title_fill_segments` 每项只允许 `path`（必填）、`start`（≥ 0）、`duration`（> 0）、`name`；`clips/overlays/sfx` 内 `id` 不能重复，缺省时自动生成。`version` 大于 5 的工程拒绝。
+规则：未知字段拒绝；必填字段缺失拒绝；类型按定义检查（数字字段不接受布尔值和字符串）；字符串不能包含 NUL 或无效的 Unicode（例如 JSON 转义 `"\ud800"` 这样的孤立代理项，无法写成 UTF-8），`edit_plan` / `edit_log` 内的键和值同样如此；数字必须是有限值（`NaN`、`Infinity`、`1e9999` 这类会解析成无穷的字面量，以及绝对值超过 1e15 的数都拒绝），`edit_plan` / `edit_log` 内部嵌套的数字同样如此；枚举字段只接受下表列出的值；`title_fill_segments` 每项只允许 `path`（必填）、`start`（≥ 0）、`duration`（> 0）、`name`；`clips/overlays/sfx` 内 `id` 不能重复，缺省时自动生成。`version` 大于 5 的工程拒绝。
 
 ## 访问边界
 
@@ -140,6 +142,7 @@ revision、时间戳和工程内容的指纹保存在 `<id>.meta.json` 中，而
 | 422 | `invalid_request` | 请求信封格式错误（缺少 `revision` 等），`detail.errors` 列出字段 |
 | 422 | `invalid_project` | 工程内容无效，`detail.errors` 列出每个问题 |
 | 500 | `project_corrupt` | 主文件与备份都无法读取 |
+| 503 | `project_locked` | 等待其他进程释放该工程的锁超时（30 秒），稍后重试 |
 
 ## 工程数据结构（version 5）
 
@@ -236,7 +239,8 @@ workspace/
 └── projects/
     ├── <id>.ljproject        # 当前版本：信封字段 + version 5 工程内容
     ├── <id>.ljproject.bak    # 上一次保存前的版本
-    └── <id>.meta.json        # revision、时间戳、内容指纹
+    ├── <id>.meta.json        # revision、时间戳、内容指纹（并发控制的权威来源）
+    └── <id>.lock             # 跨进程文件锁（空文件，可能残留，无害）
 ```
 
 `.ljproject` 顶层多出 `id`、`revision`、`created_at`、`updated_at` 四个字段，桌面版打开时会忽略它们。后端结合元数据、正文指纹及信封中的较新 revision 处理外部改写和中途写入失败。
