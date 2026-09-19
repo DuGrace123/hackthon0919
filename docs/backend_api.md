@@ -91,8 +91,14 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects -H 'Content-Type: application
 
 - 写入先落到同目录临时文件，`fsync` 后用 `os.replace` 原子替换，任何时刻主文件要么是完整旧版、要么是完整新版，中途崩溃只会留下旧版。
 - 每次成功保存前，上一版复制为 `<id>.ljproject.bak`。
-- 如果主文件损坏（例如磁盘异常），`GET` 会自动返回备份并把 `recovered_from_backup` 置为 `true`；之后的保存不会用损坏的文件覆盖这份备份。
+- 如果主文件损坏（例如磁盘异常），`GET` 会自动返回备份并把 `recovered_from_backup` 置为 `true`。恢复出来的内容按**新版本**计（revision 比损坏前大），持有损坏前 revision 的客户端保存会得到 409，需要重新读取；之后的保存不会用损坏的文件覆盖这份备份。
 - 桌面版 `Project.save()` 也改用同一套原子写。
+
+## 外部改写（桌面版直接编辑 workspace 里的文件）
+
+revision、时间戳和工程内容的指纹保存在 `<id>.meta.json` 中，而不只在 `.ljproject` 的信封字段里。桌面版打开 `workspace/projects/<id>.ljproject` 并原地另存时会去掉信封字段，后端读取时发现内容指纹与上次写入不一致，就把它当作一个**更新的 revision**（+1）：持有旧 revision 的网页端保存会得到 409，不会覆盖桌面端的改动；`created_at` 也不会被重置。
+
+局限：连续两次外部改写之间如果没有经过后端读取，后端无法把它们区分开。
 
 ## 输入校验
 
@@ -111,7 +117,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects -H 'Content-Type: application
 }
 ```
 
-规则：未知字段拒绝；必填字段缺失拒绝；类型按定义检查（数字字段不接受布尔值和字符串）；枚举字段只接受下表列出的值；`clips/overlays/sfx` 内 `id` 不能重复，缺省时自动生成。`version` 大于 5 的工程拒绝。
+规则：未知字段拒绝；必填字段缺失拒绝；类型按定义检查（数字字段不接受布尔值和字符串）；数字必须是有限值（`NaN`、`Infinity`、`1e9999` 这类会解析成无穷的字面量，以及绝对值超过 1e15 的数都拒绝），`edit_plan` / `edit_log` 内部嵌套的数字同样如此；枚举字段只接受下表列出的值；`title_fill_segments` 每项只允许 `path`（必填）、`start`（≥ 0）、`duration`（> 0）、`name`；`clips/overlays/sfx` 内 `id` 不能重复，缺省时自动生成。`version` 大于 5 的工程拒绝。
 
 ## 访问边界
 
@@ -180,7 +186,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects -H 'Content-Type: application
 | `title_effect` | str | `""` | `""` `bounce` `text_window` |
 | `title_text` | str | `""` | ≤ 120 字 |
 | `title_color` | str | `#FFFFFF` | |
-| `title_fill_segments` | object[] | `[]` | `text_window` 用的填充素材，每项 `{path, start, duration}` |
+| `title_fill_segments` | object[] | `[]` | `text_window` 用的填充素材，每项 `{path（必填）, start ≥ 0, duration > 0, name}` |
 | `person_effect_path` | str | `""` | 人物效果预渲染文件 |
 | `person_effect_start` / `person_effect_end` | float | 0 | ≥ 0 |
 | `person_effect_mode` | str | `""` | `""` `blur` `dim` `color` |
@@ -222,10 +228,11 @@ curl -X POST http://127.0.0.1:8000/api/v1/projects -H 'Content-Type: application
 workspace/
 └── projects/
     ├── <id>.ljproject        # 当前版本：信封字段 + version 5 工程内容
-    └── <id>.ljproject.bak    # 上一次保存前的版本
+    ├── <id>.ljproject.bak    # 上一次保存前的版本
+    └── <id>.meta.json        # revision、时间戳、内容指纹（并发控制的权威来源）
 ```
 
-文件顶层多出 `id`、`revision`、`created_at`、`updated_at` 四个字段，桌面版打开时会忽略它们。
+`.ljproject` 顶层多出 `id`、`revision`、`created_at`、`updated_at` 四个字段，桌面版打开时会忽略它们；它们只是 `.meta.json` 的副本，方便人工查看。
 
 ## 测试
 

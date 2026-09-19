@@ -85,6 +85,14 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(future.status_code, 422)
         self.assertEqual(future.json()["detail"]["errors"][0]["path"], "version")
 
+    def test_non_finite_json_numbers_are_rejected_not_persisted(self):
+        # 1e9999 is valid JSON text but parses to infinity; it must be refused, not written and then unserialisable.
+        response = self.client.post("/api/v1/projects", headers={"Content-Type": "application/json"},
+                                    content=b'{"project": {"clips": [{"path": "a.mp4", "start": 0, "end": 1e9999}]}}')
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["detail"]["errors"][0]["path"], "clips[0].end")
+        self.assertEqual(self.client.get("/api/v1/projects").json(), [])
+
     def test_cors_allows_browser_frontends(self):
         preflight = self.client.options("/api/v1/projects", headers={
             "Origin": "http://localhost:5173", "Access-Control-Request-Method": "PUT"})
