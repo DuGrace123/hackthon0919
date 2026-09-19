@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const translations = {
   zh: {
+    userGuide: '使用指南', guideNewTab: '使用指南（新标签页）',
     audioPreviewOnly: '音频可导入和预览；当前时间线仅支持视频。', accountMenu: '账户菜单', searchMedia: '搜索素材', mediaType: '素材类型', allMedia: '全部', audio: '音频',
     noResults: '没有找到素材', noResultsHint: '换个关键词，或查看全部类型。', clearFilters: '重置筛选',
     dropHere: '松开以导入素材', dropHint: '可拖入视频或音频文件', previewWelcome: '把灵感剪成故事',
@@ -32,6 +33,7 @@ const translations = {
     aiCloudHintAdmin: '云端模式尚未配置：在', aiCloudHintLink: '账户管理 → AI 接口', aiCloudHintAdminTail: '中填写服务地址和 API Key 后即可使用。', aiCloudHintEditor: '云端模式尚未配置，请联系管理员在「账户管理 → AI 接口」中填写 API 设置。'
   },
   en: {
+    userGuide: 'Guide', guideNewTab: 'User guide in Chinese (opens a new tab)',
     audioPreviewOnly: 'Audio supports import and preview. The timeline currently accepts video only.', accountMenu: 'Account menu', searchMedia: 'Search media', mediaType: 'Media type', allMedia: 'All', audio: 'Audio',
     noResults: 'No matching media', noResultsHint: 'Try another keyword or check all media types.', clearFilters: 'Clear filters',
     dropHere: 'Drop to import', dropHint: 'Drop video or audio files here', previewWelcome: 'Make room for your story',

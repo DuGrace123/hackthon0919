@@ -11,7 +11,7 @@
 <body>
   <header class="admin-topbar">
     <a href="{{ url_for('index') }}" class="brand"><span class="brand-mark">✦</span> 灵剪 <small>Web Studio</small></a>
-    <nav><a href="{{ url_for('index') }}" data-i18n="backEditor">返回编辑器</a><button id="languageToggle">EN</button><button id="logoutBtn" data-i18n="logout">退出</button></nav>
+    <nav><a href="{{ url_for('guide_page') }}" target="_blank" rel="noopener" data-i18n="userGuide">使用指南</a><a href="{{ url_for('index') }}" data-i18n="backEditor">返回编辑器</a><button id="languageToggle">EN</button><button id="logoutBtn" data-i18n="logout">退出</button></nav>
   </header>
   <main class="admin-shell">
     <section class="page-heading">
