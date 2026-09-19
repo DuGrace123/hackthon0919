@@ -1,5 +1,13 @@
 # 灵剪 LingJian AI Video Editor
 
+> ## 🌐 在线体验 / Live Website
+>
+> **[https://lingjian-demo.onrender.com](https://lingjian-demo.onrender.com)**
+>
+> 无需安装软件，在浏览器中上传素材、剪辑并导出视频。
+>
+> [📖 简明使用指南](https://lingjian-demo.onrender.com/guide) · [📄 下载 PDF 手册](https://lingjian-demo.onrender.com/guide/download)
+
 **Version:** 4.13.0 · **Platform:** any OS with Python 3.11+ and FFmpeg (browser-based editor) · **Source runtime:** Python 3.11+
 
 LingJian is a browser-based nonlinear video editor with auditable AI-assisted editing. The web editor is the only supported product surface. The earlier PySide6 desktop application remains in the repository for reference but is no longer maintained (see [Desktop application (legacy)](#desktop-application-legacy)).
