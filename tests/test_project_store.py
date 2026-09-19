@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 import threading
 import unittest
@@ -79,6 +80,28 @@ class ValidationTests(unittest.TestCase):
         self.assertNotIn("revision", clean)
         self.assertNotIn("id", clean)
 
+    def test_non_finite_numbers_are_rejected_everywhere(self):
+        nan, inf = float("nan"), float("inf")
+        errors = self.errors({
+            "bgm_volume": nan,
+            "clips": [
+                {"path": "a.mp4", "start": 0, "end": inf, "mask_feather": nan},
+                {"path": "b.mp4", "start": 0, "end": 1, "title_fill_segments": [
+                    {"path": "c.mp4", "start": "1", "duration": {}}, "x", {"path": "", "extra": 1}]},
+            ],
+            "edit_plan": {"scores": [1, nan]},
+            "edit_log": [{"value": inf}],
+        })
+        for path in ("bgm_volume", "clips[0].end", "clips[0].mask_feather",
+                     "clips[1].title_fill_segments[0].start", "clips[1].title_fill_segments[0].duration",
+                     "clips[1].title_fill_segments[1]", "clips[1].title_fill_segments[2].path",
+                     "clips[1].title_fill_segments[2]", "edit_plan.scores[1]", "edit_log[0].value"):
+            self.assertIn(path, errors, errors)
+        self.assertIn("clips[0].end", self.errors({"clips": [{"path": "a", "start": 0, "end": 10 ** 400}]}))
+        clean = validate_project_payload({"clips": [{"path": "a", "start": 0, "end": 1, "title_fill_segments": [
+            {"path": "b", "start": 0.5, "duration": 0.4, "name": "b"}]}]})
+        self.assertEqual(clean["clips"][0]["title_fill_segments"][0]["duration"], 0.4)
+
     def test_old_desktop_version_is_upgraded(self):
         if not SAMPLE.exists():
             self.skipTest("sample project not present")
@@ -130,9 +153,10 @@ class ProjectStoreTests(unittest.TestCase):
         summary = self.store.list()[0]
         self.assertEqual((summary["revision"], summary["clip_count"], summary["duration"]), (3, 2, 4.5))
         self.assertTrue(self.file(record.id, ".ljproject.bak").exists())
+        self.assertEqual(json.loads(self.file(record.id, ".meta.json").read_text(encoding="utf-8"))["revision"], 3)
         self.store.delete(record.id)
-        self.assertFalse(self.file(record.id).exists())
-        self.assertFalse(self.file(record.id, ".ljproject.bak").exists())
+        for suffix in (".ljproject", ".ljproject.bak", ".meta.json"):
+            self.assertFalse(self.file(record.id, suffix).exists(), suffix)
         with self.assertRaises(ProjectNotFound):
             self.store.get(record.id)
         with self.assertRaises(ProjectNotFound):
@@ -201,10 +225,13 @@ class ProjectStoreTests(unittest.TestCase):
         self.file(record.id).write_text('{"id": "half written', encoding="utf-8")
         recovered = self.store.get(record.id)
         self.assertTrue(recovered.recovered_from_backup)
-        self.assertEqual((recovered.revision, recovered.project["title"]), (1, "损坏"))
+        # The backup body differs from the last write, so it is served as a newer revision (2 -> 3), never an older one.
+        self.assertEqual((recovered.revision, recovered.project["title"]), (3, "损坏"))
+        with self.assertRaises(RevisionConflict):
+            self.store.save(record.id, sample_payload("拿着损坏前 revision 的客户端"), 2)
         # Saving on top of the recovered copy must not overwrite the good backup with the damaged file.
-        saved = self.store.save(record.id, sample_payload("修复"), 1)
-        self.assertEqual(saved.revision, 2)
+        saved = self.store.save(record.id, sample_payload("修复"), 3)
+        self.assertEqual(saved.revision, 4)
         self.assertFalse(self.store.get(record.id).recovered_from_backup)
         backup = json.loads(self.file(record.id, ".ljproject.bak").read_text(encoding="utf-8"))
         self.assertEqual(backup["title"], "损坏")
@@ -220,10 +247,39 @@ class ProjectStoreTests(unittest.TestCase):
         record = self.store.create(project=sample_payload("桌面兼容"))
         desktop = Project.load(self.file(record.id))
         self.assertEqual(desktop.to_dict(), record.project)
-        # A file written by the desktop application (no envelope) is readable too.
+        # A desktop save in place strips the envelope; it must count as a newer revision, not reset to 1.
         desktop.title = "桌面端另存"
         desktop.save(self.file(record.id))
+        external = self.store.get(record.id)
+        self.assertEqual((external.project["title"], external.revision), ("桌面端另存", 2))
+        self.assertEqual(external.created_at, record.created_at)
+        with self.assertRaises(RevisionConflict):
+            self.store.save(record.id, sample_payload("拿着旧 revision 的网页端"), 1)
         self.assertEqual(self.store.get(record.id).project["title"], "桌面端另存")
+        self.assertEqual(self.store.save(record.id, sample_payload("网页端合并后"), 2).revision, 3)
+        self.assertEqual(self.store.get(record.id).revision, 3)
+
+    def test_crash_between_project_and_metadata_write_stays_consistent(self):
+        record = self.store.create("半途")
+        self.store.save(record.id, sample_payload("旧版本"), 1)
+        real_replace = os.replace
+        calls = []
+
+        def flaky(src, dst):
+            calls.append(str(dst))
+            if len(calls) == 2:  # the project file is already replaced; the metadata write dies
+                raise OSError("power loss")
+            return real_replace(src, dst)
+
+        with mock.patch("video_editing_engine.os.replace", side_effect=flaky):
+            with self.assertRaises(OSError):
+                self.store.save(record.id, sample_payload("新版本"), 2)
+        current = self.store.get(record.id)
+        self.assertEqual((current.revision, current.project["title"]), (3, "新版本"))
+        with self.assertRaises(RevisionConflict):
+            self.store.save(record.id, sample_payload("旧客户端"), 2)
+        self.assertEqual(self.store.save(record.id, sample_payload("继续"), 3).revision, 4)
+        self.assertEqual(self.store.get(record.id).revision, 4)
 
     def test_concurrent_saves_exactly_one_wins(self):
         record = self.store.create("并发")

@@ -10,14 +10,19 @@ the project/clip structure; this module only adds the guarantees the store needs
   as ``<id>.ljproject.bak``, so a failed save never damages the old file;
 - every save carries the revision the client last read; a stale revision is
   rejected with ``RevisionConflict`` instead of overwriting someone else's work;
+- revision, timestamps and a fingerprint of the body live in ``<id>.meta.json``;
+  a file rewritten by another tool (the desktop app strips the envelope) is
+  recognised by its changed fingerprint and counted as a newer revision;
 - project ids are server generated and strictly checked, and every path is
   resolved inside the workspace, so no request can reach files outside it.
 """
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -35,6 +40,9 @@ log = logging.getLogger(__name__)
 SCHEMA_VERSION = 5
 PROJECT_SUFFIX = ".ljproject"
 BACKUP_SUFFIX = ".ljproject.bak"
+META_SUFFIX = ".meta.json"
+MAX_MAGNITUDE = 1e15  # any numeric project field beyond this is nonsense and would not survive float formatting
+FILL_SEGMENT_KEYS = {"path", "start", "duration", "name"}
 ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 RATIO_PATTERN = re.compile(r"^\d+:\d+$")
 TITLE_MAX_CHARS = 120
@@ -146,8 +154,40 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _mtime_iso(path: Path) -> str:
+    try:
+        stamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    except OSError:
+        return _now()
+    return stamp.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _fingerprint(project: dict) -> str:
+    return hashlib.sha1(json.dumps(project, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """Finite, sane-magnitude int/float; NaN and infinities parse from JSON but cannot be written back as strict JSON."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return abs(value) <= MAX_MAGNITUDE
+
+
+def _check_finite(value, path: str, errors: list[dict]) -> None:
+    """Free-form structures (edit_plan, edit_log) must stay strict JSON: no NaN/Infinity anywhere inside."""
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        if not _is_number(value):
+            errors.append({"path": path, "message": "必须是有限数字"})
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _check_finite(item, f"{path}.{key}" if path else str(key), errors)
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            _check_finite(item, f"{path}[{i}]", errors)
 
 
 class _Checker:
@@ -178,14 +218,19 @@ class _Checker:
             self.fail(name, f"不支持的值 {value!r}，允许：{', '.join(sorted(repr(x) for x in allowed))}")
 
     def text(self, name: str, max_chars: int | None = None, required: bool = False) -> None:
-        value = self.data.get(name)
-        if required and not (isinstance(value, str) and value.strip()):
+        if name not in self.data:
+            if required:
+                self.fail(name, "不能为空")
+            return
+        value = self.data[name]
+        if not isinstance(value, str):
+            return self.fail(name, "必须是字符串")
+        if required and not value.strip():
             return self.fail(name, "不能为空")
-        if isinstance(value, str):
-            if "\x00" in value:
-                self.fail(name, "包含非法字符")
-            elif max_chars is not None and len(value) > max_chars:
-                self.fail(name, f"最多 {max_chars} 个字符")
+        if "\x00" in value:
+            self.fail(name, "包含非法字符")
+        elif max_chars is not None and len(value) > max_chars:
+            self.fail(name, f"最多 {max_chars} 个字符")
 
 
 def _check_fields(prefix: str, data, cls, errors: list[dict], required: set[str]) -> bool:
@@ -208,10 +253,29 @@ def _check_fields(prefix: str, data, cls, errors: list[dict], required: set[str]
         expected = _TYPE_CHECKS.get(str(fields[name].type))
         if expected is None:
             continue
-        if not isinstance(value, expected) or (expected == (int, float) and isinstance(value, bool)) or (expected == (int,) and isinstance(value, bool)):
+        numeric = expected in ((int, float), (int,))
+        if not isinstance(value, expected) or (numeric and isinstance(value, bool)):
             errors.append({"path": f"{prefix}.{name}", "message": f"类型应为 {fields[name].type}"})
             ok = False
+        elif numeric and not _is_number(value):
+            errors.append({"path": f"{prefix}.{name}", "message": "必须是有限数字"})
+            ok = False
     return ok
+
+
+def _check_fill_segment(prefix: str, segment, errors: list[dict]) -> None:
+    """title_fill_segments entries go through float() in build_render_command; keep them numeric here."""
+    if not isinstance(segment, dict):
+        errors.append({"path": prefix, "message": "必须是 JSON 对象"})
+        return
+    unknown = sorted(set(segment) - FILL_SEGMENT_KEYS)
+    if unknown:
+        errors.append({"path": prefix, "message": f"未知字段 {', '.join(unknown)}；允许的字段：{', '.join(sorted(FILL_SEGMENT_KEYS))}"})
+    s = _Checker(prefix, segment, errors)
+    s.text("path", required=True)
+    s.text("name", 200)
+    s.number("start", 0)
+    s.number("duration", 0, exclusive_lo=True)
 
 
 def _check_clip(prefix: str, data: dict, errors: list[dict]) -> None:
@@ -243,8 +307,7 @@ def _check_clip(prefix: str, data: dict, errors: list[dict]) -> None:
     c.choice("title_effect", ALLOWED_TITLE_EFFECTS)
     c.choice("person_effect_mode", ALLOWED_PERSON_MODES)
     for i, segment in enumerate(data.get("title_fill_segments") or []):
-        if not isinstance(segment, dict) or not isinstance(segment.get("path"), str):
-            c.fail(f"title_fill_segments[{i}]", "必须是带 path 的对象")
+        _check_fill_segment(f"{prefix}.title_fill_segments[{i}]", segment, errors)
 
 
 def _check_overlay(prefix: str, data: dict, errors: list[dict]) -> None:
@@ -302,12 +365,10 @@ def validate_project_payload(data) -> dict:
     elif version > SCHEMA_VERSION:
         errors.append({"path": "version", "message": f"不支持的工程版本 {version}，当前最高支持 {SCHEMA_VERSION}"})
     top = _Checker("", body, errors)
-    for name in ("title", "bgm", "bgm_id", "ratio", "prompt"):
-        if name in body and not isinstance(body[name], str):
-            top.fail(name, "必须是字符串")
     top.text("title", TITLE_MAX_CHARS)
     top.text("bgm", 4096)
     top.text("bgm_id", 100)
+    top.text("ratio", 20)
     top.text("prompt", 10000)
     if isinstance(body.get("ratio"), str) and not RATIO_PATTERN.match(body["ratio"]):
         top.fail("ratio", "画幅比例格式应为 宽:高，例如 9:16")
@@ -318,8 +379,12 @@ def validate_project_payload(data) -> dict:
         top.fail("bgm_ducking", "必须是布尔值")
     if "edit_plan" in body and not isinstance(body["edit_plan"], dict):
         top.fail("edit_plan", "必须是 JSON 对象")
+    else:
+        _check_finite(body.get("edit_plan", {}), "edit_plan", errors)
     if "edit_log" in body and not isinstance(body["edit_log"], list):
         top.fail("edit_log", "必须是列表")
+    else:
+        _check_finite(body.get("edit_log", []), "edit_log", errors)
     for key, (cls, required, check) in _ITEM_RULES.items():
         items = body.get(key, [])
         if not isinstance(items, list):
@@ -355,11 +420,16 @@ def validate_project_payload(data) -> dict:
         errors.append({"path": "", "message": f"工程数据无法解析：{exc}"})
     if errors:
         raise InvalidProject(errors)
-    return project.to_dict()
+    canonical = project.to_dict()
+    try:
+        json.dumps(canonical, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise InvalidProject([{"path": "", "message": f"工程包含无法写成 JSON 的内容：{exc}"}])
+    return canonical
 
 
 class ProjectStore:
-    """File-backed project repository: ``<workspace>/projects/<id>.ljproject`` (+ ``.bak``)."""
+    """File-backed project repository: ``<workspace>/projects/<id>.ljproject`` (+ ``.bak`` and ``.meta.json``)."""
 
     def __init__(self, workspace: str | os.PathLike):
         self.workspace = Path(workspace).resolve()
@@ -390,21 +460,51 @@ class ProjectStore:
             return self._locks.setdefault(project_id, threading.Lock())
 
     # ---- file io ---------------------------------------------------------------------
-    def _parse(self, text: str, project_id: str, recovered: bool) -> ProjectRecord:
+    def _load_body(self, path: Path, project_id: str) -> tuple[dict, dict]:
+        """Parse and validate one project file; returns (raw file dict, canonical project)."""
         try:
-            raw = json.loads(text)
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise ProjectCorrupt(f"工程文件不是合法 JSON：{exc.msg}", project_id=project_id)
         if not isinstance(raw, dict):
             raise ProjectCorrupt("工程文件不是 JSON 对象", project_id=project_id)
         try:
-            project = validate_project_payload(raw)
+            return raw, validate_project_payload(raw)
         except InvalidProject as exc:
             raise ProjectCorrupt("工程文件内容无效", project_id=project_id, errors=exc.errors)
-        revision = raw.get("revision", 1)
+
+    def _read_meta(self, project_id: str) -> dict | None:
+        path = self._path(project_id, META_SUFFIX)
+        if not path.exists():
+            return None
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            log.warning("ignoring unreadable metadata for %s: %s", project_id, exc)
+            return None
+        revision = meta.get("revision") if isinstance(meta, dict) else None
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1 or not isinstance(meta.get("fingerprint"), str):
+            log.warning("ignoring malformed metadata for %s", project_id)
+            return None
+        return meta
+
+    def _record(self, project_id: str, raw: dict, project: dict, meta: dict | None, path: Path, recovered: bool) -> ProjectRecord:
+        if meta is not None:
+            created = meta.get("created_at") if isinstance(meta.get("created_at"), str) else _mtime_iso(path)
+            if meta["fingerprint"] == _fingerprint(project):
+                updated = meta.get("updated_at") if isinstance(meta.get("updated_at"), str) else created
+                return ProjectRecord(project_id, meta["revision"], created, updated, project, recovered)
+            # The body differs from the store's last write (desktop save, hand edit, backup recovery, or a crash
+            # between the two writes): count it as a newer revision so clients holding the old one conflict
+            # instead of silently winning. The envelope revision covers the crash case where it ran ahead.
+            envelope = raw.get("revision")
+            envelope = envelope if isinstance(envelope, int) and not isinstance(envelope, bool) else 0
+            return ProjectRecord(project_id, max(meta["revision"] + 1, envelope), created, _mtime_iso(path), project, recovered)
+        # No metadata: a legacy or foreign file; trust its envelope if it has one.
+        revision = raw.get("revision")
         if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
             revision = 1
-        created = raw.get("created_at") if isinstance(raw.get("created_at"), str) else _now()
+        created = raw.get("created_at") if isinstance(raw.get("created_at"), str) else _mtime_iso(path)
         updated = raw.get("updated_at") if isinstance(raw.get("updated_at"), str) else created
         return ProjectRecord(project_id, revision, created, updated, project, recovered)
 
@@ -412,20 +512,27 @@ class ProjectStore:
         path = self._path(project_id)
         if not path.exists():
             raise ProjectNotFound("工程不存在", project_id=project_id)
+        meta = self._read_meta(project_id)
         try:
-            return self._parse(path.read_text(encoding="utf-8"), project_id, False)
+            raw, project = self._load_body(path, project_id)
         except (ProjectCorrupt, OSError, UnicodeDecodeError) as exc:
             backup = self._path(project_id, BACKUP_SUFFIX)
             if not backup.exists():
                 raise exc if isinstance(exc, ProjectCorrupt) else ProjectCorrupt(f"工程文件无法读取：{exc}", project_id=project_id)
             log.warning("project %s is damaged (%s); serving backup", project_id, exc)
-            return self._parse(backup.read_text(encoding="utf-8"), project_id, True)
+            raw, project = self._load_body(backup, project_id)
+            return self._record(project_id, raw, project, meta, backup, True)
+        return self._record(project_id, raw, project, meta, path, False)
 
     def _write(self, record: ProjectRecord, keep_backup: bool) -> None:
         path = self._path(record.id)
         if keep_backup and path.exists():
             shutil.copy2(path, self._path(record.id, BACKUP_SUFFIX))
-        atomic_write_text(path, json.dumps(record.to_file_dict(), ensure_ascii=False, indent=2))
+        atomic_write_text(path, json.dumps(record.to_file_dict(), ensure_ascii=False, indent=2, allow_nan=False))
+        # Concurrency metadata lives beside the project so a tool that rewrites the body cannot reset it.
+        meta = {"id": record.id, "revision": record.revision, "created_at": record.created_at,
+                "updated_at": record.updated_at, "fingerprint": _fingerprint(record.project)}
+        atomic_write_text(self._path(record.id, META_SUFFIX), json.dumps(meta, ensure_ascii=False, indent=2))
 
     # ---- public api ------------------------------------------------------------------
     def create(self, title: str | None = None, ratio: str | None = None, project: dict | None = None) -> ProjectRecord:
@@ -486,6 +593,7 @@ class ProjectStore:
             if not path.exists():
                 raise ProjectNotFound("工程不存在", project_id=project_id)
             path.unlink()
-            backup = self._path(project_id, BACKUP_SUFFIX)
-            if backup.exists():
-                backup.unlink()
+            for suffix in (BACKUP_SUFFIX, META_SUFFIX):
+                extra = self._path(project_id, suffix)
+                if extra.exists():
+                    extra.unlink()
