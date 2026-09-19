@@ -368,15 +368,29 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
 
     @app.get("/guide")
     def guide_page():
-        guide = json.loads((ROOT / "web" / "user_guide.json").read_text(encoding="utf-8"))
-        return render_template("guide.html", guide=guide)
+        language = guide_language()
+        filename = "user_guide.json" if language == "zh" else "user_guide.en.json"
+        guide = json.loads((ROOT / "web" / filename).read_text(encoding="utf-8"))
+        response = app.make_response(render_template("guide.html", guide=guide, language=language))
+        response.headers["Content-Language"] = language
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
+    def guide_language():
+        language = request.args.get("lang", request.cookies.get("lingjian-language", "en"))
+        return language if language in {"en", "zh"} else "en"
 
     @app.get("/guide/download")
     def guide_pdf():
-        return send_from_directory(
-            ROOT / "web" / "static" / "guides", "lingjian-quick-start.pdf",
-            as_attachment=True, download_name="灵剪快速上手.pdf", mimetype="application/pdf",
+        language = guide_language()
+        filename = "lingjian-quick-start.pdf" if language == "zh" else "lingjian-quick-start.en.pdf"
+        response = send_from_directory(
+            ROOT / "web" / "static" / "guides", filename,
+            as_attachment=True, download_name="灵剪快速上手.pdf" if language == "zh" else "LingJian-Quick-Start.pdf", mimetype="application/pdf",
         )
+        response.headers["Content-Language"] = language
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
 
     @app.get("/api/auth/status")
     def auth_status():

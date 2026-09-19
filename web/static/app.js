@@ -45,7 +45,7 @@ const translations = {
     aiLocalNotice: '本地模式按场景和时长选片，不上传素材、不生成语音字幕。', aiCloudNotice: '云端分析会发送抽帧图片、音频和剪辑要求，可能产生 API 费用。', aiLanguageMismatch: '该方案是在另一种界面语言下生成的；重新生成即可获得当前语言的报告。'
   },
   en: {
-    userGuide: 'Guide', guideNewTab: 'User guide in Chinese (opens a new tab)',
+    userGuide: 'Guide', guideNewTab: 'User guide (opens a new tab)',
     audioPreviewOnly: 'Audio supports import and preview. The timeline currently accepts video only.', accountMenu: 'Account menu', searchMedia: 'Search media', mediaType: 'Media type', allMedia: 'All', audio: 'Audio',
     noResults: 'No matching media', noResultsHint: 'Try another keyword or check all media types.', clearFilters: 'Clear filters',
     dropHere: 'Drop to import', dropHint: 'Drop video or audio files here', previewWelcome: 'Make room for your story',
@@ -112,12 +112,13 @@ const state = {
   currentPreviewTitle: null,
   draggedClipId: null,
   timelineScale: Math.max(35, Math.min(150, Number(localStorage.getItem('lingjian-timeline-scale')) || 70)),
-  lang: localStorage.getItem('lingjian-language') === 'en' ? 'en' : 'zh',
+  lang: LingJianLanguage.get(),
   csrfToken: document.querySelector('meta[name="csrf-token"]')?.content || '',
   ai: {capabilities: null, plan: null, pollTimer: null, selected: [], order: [], sources: [], view: 'aiSetup'},
 };
 
 function applyLanguage(shouldRender = true) {
+  LingJianLanguage.set(state.lang);
   document.documentElement.lang = state.lang === 'en' ? 'en' : 'zh-CN';
   document.title = t('pageTitle');
   document.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
@@ -506,7 +507,6 @@ $('#projectRatio').addEventListener('change', () => updateProject().catch((error
 
 $('#languageToggle').addEventListener('click', () => {
   state.lang = state.lang === 'zh' ? 'en' : 'zh';
-  localStorage.setItem('lingjian-language', state.lang);
   applyLanguage();
 });
 $('#logoutBtn').addEventListener('click', async () => {

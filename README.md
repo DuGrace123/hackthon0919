@@ -58,7 +58,7 @@ Importing a batch is all-or-nothing: validation or catalog-write failures remove
 
 ## Make your first video
 
-Open the **使用指南 / Guide** link on the login page, editor toolbar, or account-management page. The public [`/guide`](https://lingjian-demo.onrender.com/guide) page explains the four-step workflow, AI setup, shared workspace, and temporary storage, and offers a one-page PDF download without requiring a login. Guide links open a new tab to preserve the editing session. The HTML and PDF use the same content in `web/user_guide.json`; see [guide maintenance](docs/user_guide.md) when updating it.
+Open the **使用指南 / Guide** link on the login page, editor toolbar, or account-management page. The public [`/guide`](https://lingjian-demo.onrender.com/guide) page explains the four-step workflow, AI setup, shared workspace, and temporary storage, and offers a one-page PDF download without requiring a login. Guide links open a new tab to preserve the editing session. The guide and its one-page PDF follow the selected English/Chinese interface language; first-time visitors default to English. The HTML and PDF share `web/user_guide.en.json` (English) and `web/user_guide.json` (Chinese); see [guide maintenance](docs/user_guide.md) when updating them.
 
 1. **Import footage.** Click **＋ 导入 / Import** and select video or audio files. The login page and every screen switch between 中文 and English with the language control in the top-right corner.
 2. **Ask the AI Director for a cut.** Click **AI 导演 / AI Director**, tick the source clips, set the target duration (5–180 seconds), describe what you want, and click **生成方案 / Generate Plan**. Local mode needs no API key.

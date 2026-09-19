@@ -23,16 +23,57 @@
   ],
   "ai_tip": "用 GPT 前：管理员进入「账户管理 → AI 接口」，填写接口、密钥和模型，测试后点击「保存设置」；剪辑时选「云端分析」并确认素材发送与费用。暂未配置时可用「本地分析」，它在网站服务器上运行，不调用 GPT。",
   "storage": [
-    {"place": "你的电脑", "content": "原始视频、下载后的 MP4。"},
-    {"place": "网站服务器", "content": "上传的素材、剪辑工程、账户、AI 设置和待下载成片。"},
-    {"place": "GitHub", "content": "网站代码和使用指南，不会自动保存你上传的视频。"}
+    {
+      "place": "你的电脑",
+      "content": "原始视频、下载后的 MP4。"
+    },
+    {
+      "place": "网站服务器",
+      "content": "上传的素材、剪辑工程、账户、AI 设置和待下载成片。"
+    },
+    {
+      "place": "GitHub",
+      "content": "网站代码和使用指南，不会自动保存你上传的视频。"
+    }
   ],
   "storage_warning": "当前免费服务器休眠、重启或更新网站后，会丢失临时数据，包括账户和素材。「保存」仅写入服务器，请保留原片并及时下载成片。",
   "team_tip": "所有账户目前共用一份工程和素材库。建议一次由一人编辑，交接前保存，下一位刷新后继续。",
   "faqs": [
-    {"question": "第一次打开很慢？", "answer": "免费服务器可能正在唤醒，通常等待约 1 分钟即可。"},
-    {"question": "提示文件太大，或导入失败？", "answer": "每批总大小需小于 50 MB，包含所有选中的文件。拆成多批或先压缩大文件，优先使用 H.264 编码的 MP4。音频目前只能导入和预览。"},
-    {"question": "为什么生成了 AI 方案却没有成片？", "answer": "先检查方案并点击「应用到时间线」，再点击「导出视频」。AI 负责出方案，FFmpeg 在服务器上完成视频合成。"},
-    {"question": "更新 GitHub 后，网站会更新吗？", "answer": "自动更新需要先在 Render 的 Git Provider 中连接这个仓库。连接后，main 更新且检查通过才会自动部署；个人分支或未合并的 PR 不会更新正式网站。如果没有触发部署，在 Render 点击「Manual Deploy → Deploy latest commit」。发布成功后网址不变。"}
-  ]
+    {
+      "question": "第一次打开很慢？",
+      "answer": "免费服务器可能正在唤醒，通常等待约 1 分钟即可。"
+    },
+    {
+      "question": "提示文件太大，或导入失败？",
+      "answer": "每批总大小需小于 50 MB，包含所有选中的文件。拆成多批或先压缩大文件，优先使用 H.264 编码的 MP4。音频目前只能导入和预览。"
+    },
+    {
+      "question": "为什么生成了 AI 方案却没有成片？",
+      "answer": "先检查方案并点击「应用到时间线」，再点击「导出视频」。AI 负责出方案，FFmpeg 在服务器上完成视频合成。"
+    },
+    {
+      "question": "更新 GitHub 后，网站会更新吗？",
+      "answer": "本仓库已连接 Render。main 更新且检查通过后会自动部署；个人分支或未合并的 PR 不会更新正式网站。如果没有触发部署，在 Render 点击「Manual Deploy → Deploy latest commit」。发布成功后网址不变。"
+    }
+  ],
+  "ui": {
+    "brand": "灵剪",
+    "page_label": "使用指南",
+    "description": "灵剪网页版快速指南：上传素材、手动与 AI 剪辑、导出 MP4，以及数据保存说明。",
+    "actions_label": "指南操作",
+    "download_pdf": "下载 PDF",
+    "open_editor": "进入剪辑台",
+    "eyebrow": "QUICK START · 一页就会用",
+    "steps_label": "制作视频的步骤",
+    "ai_label": "使用 AI 前",
+    "storage_title": "数据存在哪里？",
+    "download_reminder": "记得下载成片。",
+    "team_label": "五人协作：",
+    "faq_title": "遇到问题时",
+    "footer_prefix": "适用于当前演示站",
+    "hosting_link": "免费服务说明",
+    "share_pdf": "下载一页版，发给组员 →",
+    "pdf_eyebrow": "灵剪 / 一页使用指南",
+    "pdf_more": "更多问题："
+  }
 }
