@@ -913,12 +913,13 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             raise WorkflowError("invalid_duration", "目标时长必须为 5 到 180 秒。", 422)
         mode, prompt = payload.get("mode", "local"), payload.get("prompt", "")
         opening, style = payload.get("opening", "hook"), payload.get("style", "")
-        if not all(isinstance(value, str) for value in (mode, prompt, opening, style)):
+        language = payload.get("language", "zh")
+        if not all(isinstance(value, str) for value in (mode, prompt, opening, style, language)):
             raise WorkflowError("invalid_request", "请求格式不正确。", 422)
         plan = workflow.create(
             WEB_PROJECT_ID, ai_owner(), media_ids=media_ids, revision=ai_revision(payload.get("revision")),
             mode=mode, target_duration=target, prompt=prompt, cloud_consent=payload.get("cloud_consent") is True,
-            opening=opening, style=style.strip(),
+            opening=opening, style=style.strip(), language=language,
         )
         return jsonify(plan), 202
 

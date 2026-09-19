@@ -8,12 +8,12 @@ from pathlib import Path
 
 
 MUSIC_LIBRARY = [
-    {"id": "travel_breeze", "name": "旅行微风", "file": "travel_breeze.wav", "mood": "旅行 · 明亮", "volume": .20},
-    {"id": "kitchen_pop", "name": "厨房跳跳糖", "file": "kitchen_pop.wav", "mood": "美食 · 轻快", "volume": .18},
-    {"id": "daily_sunshine", "name": "日常晴天", "file": "daily_sunshine.wav", "mood": "生活 · 温暖", "volume": .20},
-    {"id": "story_pulse", "name": "故事脉冲", "file": "story_pulse.wav", "mood": "剧情 · 推进", "volume": .17},
-    {"id": "documentary_air", "name": "纪录空气感", "file": "documentary_air.wav", "mood": "纪录 · 克制", "volume": .18},
-    {"id": "clean_focus", "name": "清晰专注", "file": "clean_focus.wav", "mood": "口播 · 轻盈", "volume": .14},
+    {"id": "travel_breeze", "name": "旅行微风", "name_en": "Travel Breeze", "file": "travel_breeze.wav", "mood": "旅行 · 明亮", "volume": .20},
+    {"id": "kitchen_pop", "name": "厨房跳跳糖", "name_en": "Kitchen Pop", "file": "kitchen_pop.wav", "mood": "美食 · 轻快", "volume": .18},
+    {"id": "daily_sunshine", "name": "日常晴天", "name_en": "Daily Sunshine", "file": "daily_sunshine.wav", "mood": "生活 · 温暖", "volume": .20},
+    {"id": "story_pulse", "name": "故事脉冲", "name_en": "Story Pulse", "file": "story_pulse.wav", "mood": "剧情 · 推进", "volume": .17},
+    {"id": "documentary_air", "name": "纪录空气感", "name_en": "Documentary Air", "file": "documentary_air.wav", "mood": "纪录 · 克制", "volume": .18},
+    {"id": "clean_focus", "name": "清晰专注", "name_en": "Clean Focus", "file": "clean_focus.wav", "mood": "口播 · 轻盈", "volume": .14},
 ]
 
 

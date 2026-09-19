@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from plan_i18n import named, normalize_language, plan_language, role_label, tr, transition_label
+
 
 PLAN_SCHEMA_VERSION = 1
 ALLOWED_ROLES = {"hook", "setup", "development", "climax", "outro"}
@@ -30,14 +32,19 @@ ALLOWED_MASKS = {
 OPENING_PRESETS = {
     "hollow_vlog": {
         "name": "镂空 VLOG · 字内走马灯",
+        "name_en": "Hollow VLOG · Carousel inside the letters",
         "summary": "远景背景保持正常播放，中央 VLOG 字形成为透明画中画窗口，内部巡游全部素材并同步滴答。",
+        "summary_en": "The wide background keeps playing while the central VLOG letters become a transparent window that cycles through every source in step with a ticking clock.",
         "text_window": True,
         "beats": [],
     },
     "bounce_time": {
         "name": "Q 弹时光 · 滴答回溯",
+        "name_en": "Bouncy Time · Ticking rewind",
         "summary": "中央果冻感标题弹入并衰减回弹，前三个镜头以聚焦、分屏和画中画配合滴答进入短篇。",
+        "summary_en": "A jelly title bounces in and settles; the first three shots use a spotlight, a split screen and picture-in-picture in step with the ticking clock.",
         "bounce_title": True,
+        "purposes_en": ["Jelly title lands and spotlights the subject", "The tick moves into the first time rewind", "Picture-in-picture zooms into the body of the short"],
         "beats": [
             ("spotlight", "none", .50, .50, .72, .66, 28, "Q 弹标题落位并聚焦主体"),
             ("split_left", "cover_left", .50, .50, .52, .90, 12, "滴答推进第一次时间回溯"),
@@ -46,13 +53,18 @@ OPENING_PRESETS = {
     },
     "carousel_flash": {
         "name": "走马灯闪回 · 全素材巡游",
+        "name_en": "Carousel Flashback · Tour of every source",
         "summary": "从每个导入素材各取一个短瞬间，窗格左右巡游并快速闪回，随后按真实拍摄顺序进入正文。",
+        "summary_en": "One short moment from every imported source glides left and right in quick flashes, then the body follows the real shooting order.",
         "montage": True,
         "beats": [],
     },
     "cinematic_window": {
         "name": "电影窗格 · Vlog 高级开篇",
+        "name_en": "Cinematic Window · Premium vlog opening",
         "summary": "先用悬浮窗格保留环境，再放大进入全屏；适合旅行、生活记录和人物出场。",
+        "summary_en": "A floating window keeps the surroundings first, then zooms to full screen; suited to travel, daily life and character entrances.",
+        "purposes_en": ["Window establishes the place and the people", "Picture-in-picture zooms into the body", "Back to clean full-screen storytelling"],
         "beats": [
             ("portrait_card", "none", .50, .50, .78, .72, 18, "窗格建立地点与人物"),
             ("cinema", "pip_zoom", .50, .50, .88, .76, 12, "画中画放大进入正文"),
@@ -61,7 +73,10 @@ OPENING_PRESETS = {
     },
     "split_rhythm": {
         "name": "动态分屏 · 节奏快切",
+        "name_en": "Dynamic Split · Rhythmic cuts",
         "summary": "窄条预告、左右分屏、全屏释放，适合多个细节镜头和音乐重拍。",
+        "summary_en": "Narrow-strip teaser, left/right split screen, then full-screen release; suited to many detail shots and musical beats.",
+        "purposes_en": ["Narrow strip reveals only the key detail", "Left split adds the second piece of information", "Right reveal, then full screen"],
         "beats": [
             ("vertical_strip", "none", .50, .50, .42, .90, 10, "窄条只透露关键细节"),
             ("split_left", "cover_left", .50, .50, .52, .92, 12, "左侧分屏补充第二信息"),
@@ -70,7 +85,10 @@ OPENING_PRESETS = {
     },
     "subject_reveal": {
         "name": "主体揭示 · 聚焦蒙版",
+        "name_en": "Subject Reveal · Spotlight mask",
         "summary": "先隐藏杂乱背景，只展示人物或产品，再用几何蒙版揭示空间。",
+        "summary_en": "Hide the cluttered background and show only the person or product, then reveal the space with a geometric mask.",
+        "purposes_en": ["Soft spotlight on the subject", "Geometric expansion reveals the surroundings", "Smooth move into the story body"],
         "beats": [
             ("spotlight", "none", .50, .48, .62, .62, 34, "柔和聚焦主体"),
             ("diamond", "circle", .50, .50, .76, .70, 22, "几何展开揭示环境"),
@@ -79,7 +97,10 @@ OPENING_PRESETS = {
     },
     "tear_flash": {
         "name": "撕裂闪回 · 强节拍开场",
+        "name_en": "Tear Flashback · Hard-beat opening",
         "summary": "暗角压住信息，以两次方向相反的数字撕裂闪回制造冲击。",
+        "summary_en": "A vignette holds the information back, then two digital tears in opposite directions deliver the impact.",
+        "purposes_en": ["Vignette builds tension and keeps room for the title", "Tear left to flash the result shot", "Reverse tear back to where the event begins"],
         "beats": [
             ("vignette", "none", .50, .50, .72, .72, 20, "暗角蓄力并保留标题空间"),
             ("cinema", "tear_left", .50, .50, .72, .72, 18, "向左撕裂闪出结果镜头"),
@@ -88,7 +109,10 @@ OPENING_PRESETS = {
     },
     "minimal_film": {
         "name": "极简电影 · 克制留白",
+        "name_en": "Minimal Film · Restrained space",
         "summary": "宽银幕建立气氛，淡黑切换章节，适合纪录、风景和慢节奏 Vlog。",
+        "summary_en": "Widescreen sets the mood, fade-to-black marks chapters; suited to documentary, scenery and slow vlogs.",
+        "purposes_en": ["Widescreen sets the mood and the place", "Fade to black into the title or goal", "Light vignette hands over to the body"],
         "beats": [
             ("cinema", "none", .50, .50, .72, .72, 16, "宽银幕建立情绪与地点"),
             ("cinema", "fade_black", .50, .50, .72, .72, 16, "经黑场进入标题或目标"),
@@ -98,8 +122,21 @@ OPENING_PRESETS = {
 }
 
 
-def opening_preset_choices() -> list[tuple[str, str]]:
-    return [("AI 智能推荐", "smart")] + [(v["name"], k) for k, v in OPENING_PRESETS.items()]
+def opening_preset_choices(language: str = "zh") -> list[tuple[str, str]]:
+    language = normalize_language(language)
+    return [(tr(language, "AI 智能推荐", "AI recommendation"), "smart")] + [(preset_name(k, language), k) for k in OPENING_PRESETS]
+
+
+def preset_name(preset_id: str, language: str = "zh") -> str:
+    return named(language, OPENING_PRESETS.get(preset_id))
+
+
+def _preset_purpose(preset: dict, index: int, language: str) -> str:
+    if normalize_language(language) == "en":
+        purposes = preset.get("purposes_en") or []
+        if index < len(purposes):
+            return purposes[index]
+    return preset["beats"][index][7]
 
 
 def recommend_opening_preset(story_style: str = "") -> str:
@@ -118,6 +155,7 @@ def recommend_opening_preset(story_style: str = "") -> str:
 def apply_opening_treatment(plan: dict, requested: str = "smart", story_style: str = "") -> dict:
     """Return a plan whose opening masks/transitions are concrete and renderable."""
     result = copy.deepcopy(plan)
+    language = plan_language(result)
     preset_id = requested if requested in OPENING_PRESETS else recommend_opening_preset(story_style)
     preset = OPENING_PRESETS[preset_id]
     decisions = result.get("decisions") or []
@@ -139,7 +177,7 @@ def apply_opening_treatment(plan: dict, requested: str = "smart", story_style: s
             if piece>=.12:fill_segments.append({"path":path,"start":round(start,3),"duration":round(piece,3),"name":str(source.get("source_name") or Path(path).name)})
         if decisions and fill_segments:
             base=decisions[0];title_duration=sum(float(x["duration"]) for x in fill_segments);base_start=float(base.get("start",0));source_duration=float(base.get("source_duration",0) or base_start+title_duration);title_duration=min(title_duration,max(.2,source_duration-base_start))
-            title={**copy.deepcopy(base),"decision_id":str(uuid.uuid4()),"ordinal":0,"start":round(base_start,3),"end":round(base_start+title_duration,3),"role":"hook","caption":"","reason":"镂空 VLOG 字内播放全素材走马灯","transition":"none","mask_shape":"none","title_effect":"text_window","title_text":"VLOG","title_fill_segments":fill_segments,"creative_purpose":"背景远景保持正常，只有字形内部切换素材"}
+            title={**copy.deepcopy(base),"decision_id":str(uuid.uuid4()),"ordinal":0,"start":round(base_start,3),"end":round(base_start+title_duration,3),"role":"hook","caption":"","reason":tr(language,"镂空 VLOG 字内播放全素材走马灯","Hollow VLOG letters play a carousel of every source"),"transition":"none","mask_shape":"none","title_effect":"text_window","title_text":"VLOG","title_fill_segments":fill_segments,"creative_purpose":tr(language,"背景远景保持正常，只有字形内部切换素材","The wide background keeps playing; only the inside of the letters switches sources")}
             for item in decisions:
                 if item.get("role")=="hook":item["role"]="setup"
             decisions=[title]+decisions
@@ -183,12 +221,13 @@ def apply_opening_treatment(plan: dict, requested: str = "smart", story_style: s
                 "source_path": path, "source_name": str(source.get("source_name") or Path(path).name),
                 "source_duration": source_duration, "capture_order": str(source.get("capture_order") or ""),
                 "start": round(start, 3), "end": round(start+duration, 3), "role": "hook",
-                "caption": "快速预览" if i == 0 else "", "reason": f"走马灯闪回：素材 {i+1}/{len(catalog)}",
+                "caption": tr(language, "快速预览", "Quick preview") if i == 0 else "",
+                "reason": tr(language, f"走马灯闪回：素材 {i+1}/{len(catalog)}", f"Carousel flashback: source {i+1}/{len(catalog)}"),
                 "transition": transition, "mask_shape": mask,
                 "mask_x": positions[i % len(positions)], "mask_y": .5,
                 "mask_width": .66 if mask == "portrait_card" else .34, "mask_height": .78,
                 "mask_feather": 10., "mask_opacity": 1.,
-                "creative_purpose": "每个素材各取一闪，快速建立本片视觉地图",
+                "creative_purpose": tr(language, "每个素材各取一闪，快速建立本片视觉地图", "One flash from every source builds the film's visual map quickly"),
             }
             teasers.append(teaser); shot_plan.append({
                 "ordinal": i, "mask": mask, "transition": transition,
@@ -206,7 +245,8 @@ def apply_opening_treatment(plan: dict, requested: str = "smart", story_style: s
         item.setdefault("mask_feather", 24.); item.setdefault("mask_opacity", 1.)
         if preset.get("montage") or preset.get("text_window") or i >= len(preset["beats"]):
             continue
-        mask, transition, x, y, width, height, feather, purpose = preset["beats"][i]
+        mask, transition, x, y, width, height, feather, _ = preset["beats"][i]
+        purpose = _preset_purpose(preset, i, language)
         item.update({
             "mask_shape": mask, "mask_x": x, "mask_y": y,
             "mask_width": width, "mask_height": height,
@@ -219,8 +259,8 @@ def apply_opening_treatment(plan: dict, requested: str = "smart", story_style: s
             "purpose": purpose, "source_name": item.get("source_name", ""),
         })
     if preset.get("bounce_title") and decisions:
-        decisions[0]["title_effect"]="bounce";decisions[0]["title_text"]="时光回溯";decisions[0]["title_color"]="#FFD43B"
-        if shot_plan:shot_plan[0]["purpose"]="Q 弹标题按弹簧曲线衰减回弹，随后滴答回溯"
+        decisions[0]["title_effect"]="bounce";decisions[0]["title_text"]=tr(language,"时光回溯","REWIND");decisions[0]["title_color"]="#FFD43B"
+        if shot_plan:shot_plan[0]["purpose"]=tr(language,"Q 弹标题按弹簧曲线衰减回弹，随后滴答回溯","Jelly title bounces in on a spring curve, then the clock ticks backwards")
     cue_ids = {
         "cinematic_window": ("impact", "whoosh", "sparkle"),
         "split_rhythm": ("clock_tick", "swipe", "pop"),
@@ -233,14 +273,14 @@ def apply_opening_treatment(plan: dict, requested: str = "smart", story_style: s
     sound_items=(decisions[0].get("title_fill_segments",[]) if preset.get("text_window") and decisions else decisions[:len(shot_plan)]) if (preset.get("montage") or preset.get("text_window")) else decisions[:min(3,len(decisions))]
     for i,item in enumerate(sound_items):
         effect_id=("clock_tick" if i%2==0 else "clock_tock") if (preset.get("montage") or preset.get("text_window")) else cue_ids.get(preset_id,("whoosh",))[i%len(cue_ids.get(preset_id,("whoosh",)))]
-        sound_cues.append({"effect_id":effect_id,"start":round(cursor,3),"volume":.72 if effect_id.startswith("clock_") else .62,"reason":f"开篇镜头 {i+1} 节拍"})
+        sound_cues.append({"effect_id":effect_id,"start":round(cursor,3),"volume":.72 if effect_id.startswith("clock_") else .62,"kind":"opening","reason":tr(language,f"开篇镜头 {i+1} 节拍",f"Opening shot {i+1} beat")})
         cursor+=float(item.get("duration",0)) if preset.get("text_window") else max(0.,float(item.get("end",0))-float(item.get("start",0)))
     result["sound_cues"]=sound_cues
     result["creative_direction"] = {
         "preset_id": preset_id,
         "requested": requested,
-        "name": preset["name"],
-        "summary": preset["summary"],
+        "name": named(language, preset),
+        "summary": preset["summary_en"] if language == "en" and preset.get("summary_en") else preset["summary"],
         "duration_hint": round((float(decisions[0].get("end",0))-float(decisions[0].get("start",0))) if preset.get("text_window") and decisions else sum(max(0., float(x.get("end", 0))-float(x.get("start", 0))) for x in (decisions[:len(shot_plan)] if preset.get("montage") else decisions[:3])), 2),
         "shots": shot_plan,
         "sounds": sound_cues,
@@ -255,7 +295,7 @@ def apply_opening_treatment(plan: dict, requested: str = "smart", story_style: s
             if path and path not in seen:seen.add(path);candidates.append(item)
         for i,item in enumerate(candidates[:layer_count]):
             timeline_start=.10+i*.18;available=max(.12,float(item.get("end",0))-float(item.get("start",0)));duration=min(.82,available,max(.12,hook_duration-timeline_start))
-            overlays.append({"id":str(uuid.uuid4()),"track":2+i,"source_path":item.get("source_path"),"source_name":item.get("source_name"),"start":float(item.get("start",0)),"end":round(float(item.get("start",0))+duration,3),"timeline_start":round(timeline_start,3),"layout":"pip_left" if i%2 else "pip_right","mask_shape":"ellipse" if i%2==0 else "none","x":.78 if i%2==0 else .22,"y":.18 if i%2==0 else .66,"width":.32 if i==0 else .28,"height":.24 if i==0 else .21,"feather":10.,"opacity":.96,"border":True,"role":"ai_mask_layer","reason":f"AI 为 {preset['name']} 创建独立 V{2+i} 合成层，并避让中央标题与底部字幕安全区"})
+            overlays.append({"id":str(uuid.uuid4()),"track":2+i,"source_path":item.get("source_path"),"source_name":item.get("source_name"),"start":float(item.get("start",0)),"end":round(float(item.get("start",0))+duration,3),"timeline_start":round(timeline_start,3),"layout":"pip_left" if i%2 else "pip_right","mask_shape":"ellipse" if i%2==0 else "none","x":.78 if i%2==0 else .22,"y":.18 if i%2==0 else .66,"width":.32 if i==0 else .28,"height":.24 if i==0 else .21,"feather":10.,"opacity":.96,"border":True,"role":"ai_mask_layer","reason":tr(language,f"AI 为 {preset['name']} 创建独立 V{2+i} 合成层，并避让中央标题与底部字幕安全区",f"AI created an independent V{2+i} compositing layer for {named(language, preset)}, clear of the centre title and the bottom caption safe zone")})
     result["overlay_tracks"]=overlays
     result["creative_direction"]["overlay_count"]=len(overlays)
     result["validation"] = validate_edit_plan(result)
@@ -281,8 +321,9 @@ def _source_meta(analyses: list[dict], index: int) -> dict:
 
 
 def build_edit_plan(sequence: list[dict], analyses: list[dict], target: float,
-                    prompt: str = "", engine: str = "cloud") -> dict:
+                    prompt: str = "", engine: str = "cloud", language: str = "zh") -> dict:
     """Convert an AI sequence into an auditable, versioned edit plan."""
+    language = normalize_language(language)
     decisions = []
     for i, raw in enumerate(sequence or []):
         source_index = int(raw.get("source_index", -1))
@@ -302,7 +343,7 @@ def build_edit_plan(sequence: list[dict], analyses: list[dict], target: float,
             "end": end,
             "role": str(raw.get("role") or ("hook" if i == 0 else "development")),
             "caption": str(raw.get("caption") or "").strip(),
-            "reason": str(raw.get("reason") or "AI 选择的有效镜头").strip(),
+            "reason": str(raw.get("reason") or tr(language, "AI 选择的有效镜头", "Valid shot chosen by AI")).strip(),
             "transition": transition,
             "mask_shape": str(raw.get("mask_shape") or "none"),
             "mask_x": float(raw.get("mask_x", .5)),
@@ -321,6 +362,7 @@ def build_edit_plan(sequence: list[dict], analyses: list[dict], target: float,
         "plan_id": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "engine": engine,
+        "language": language,
         "prompt": str(prompt or ""),
         "target_duration": round(float(target), 3),
         "capture_order_locked": should_lock_capture_order(decisions, prompt, target),
@@ -368,11 +410,11 @@ def auto_repair_capture_order(plan:dict)->list[str]:
     decisions[first_body:]=repaired
     for i,item in enumerate(decisions):item["ordinal"]=i
     plan["decisions"]=decisions
-    names=[]
-    for item,old,new in moved[:6]:names.append(f"{item.get('source_name') or Path(str(item.get('source_path') or '')).name}（{old}→{new}）")
-    message=f"已自动按真实拍摄时间修复正文顺序：移动 {len(moved)} 个镜头"
-    if names:message+="；"+"、".join(names)
-    if len(moved)>6:message+=f" 等 {len(moved)} 个"
+    language=plan_language(plan);names=[]
+    for item,old,new in moved[:6]:names.append(f"{item.get('source_name') or Path(str(item.get('source_path') or '')).name}"+tr(language,f"（{old}→{new}）",f" ({old}→{new})"))
+    message=tr(language,f"已自动按真实拍摄时间修复正文顺序：移动 {len(moved)} 个镜头",f"Body order auto-repaired by real capture time: moved {len(moved)} shot(s)")
+    if names:message+=tr(language,"；","; ")+tr(language,"、",", ").join(names)
+    if len(moved)>6:message+=tr(language,f" 等 {len(moved)} 个",f" and more ({len(moved)} in total)")
     repairs=list(plan.get("auto_repairs") or [])
     if message not in repairs:repairs.append(message)
     plan["auto_repairs"]=repairs
@@ -381,6 +423,8 @@ def auto_repair_capture_order(plan:dict)->list[str]:
 
 def validate_edit_plan(plan: dict) -> dict:
     blockers, warnings = [], []
+    language = plan_language(plan)
+    _ = lambda zh, en: tr(language, zh, en)
     # Reject invalid numeric input before sorting, clamping or mutating decisions.
     # Comparisons with NaN are false and previously let invalid timestamps pass.
     for i, item in enumerate(plan.get("decisions") or []):
@@ -389,20 +433,20 @@ def validate_edit_plan(plan: dict) -> dict:
             value = item.get(key)
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
                                       or not math.isfinite(value)):
-                blockers.append(f"第 {i + 1} 个镜头的 {key} 必须是有限数值")
+                blockers.append(_(f"第 {i + 1} 个镜头的 {key} 必须是有限数值", f"Shot {i + 1}: {key} must be a finite number"))
     target = plan.get("target_duration")
     if target is not None and (isinstance(target, bool) or not isinstance(target, (int, float))
                                or not math.isfinite(target) or target <= 0):
-        blockers.append("目标时长必须是大于零的有限数值")
+        blockers.append(_("目标时长必须是大于零的有限数值", "Target duration must be a positive finite number"))
     if blockers:
         return {"ok": False, "blockers": blockers, "warnings": [], "repairs": [],
                 "duration": 0.0, "chronology_ratio": 0.0}
     repairs=auto_repair_capture_order(plan)
     if int(plan.get("schema_version", 0)) != PLAN_SCHEMA_VERSION:
-        blockers.append("不支持的 AI 剪辑方案版本")
+        blockers.append(_("不支持的 AI 剪辑方案版本", "Unsupported AI edit plan version"))
     decisions = list(plan.get("decisions") or [])
     if not decisions:
-        blockers.append("AI 剪辑方案为空")
+        blockers.append(_("AI 剪辑方案为空", "The AI edit plan is empty"))
         return {"ok": False, "blockers": blockers, "warnings": warnings, "repairs": repairs,
                 "duration": 0.0, "chronology_ratio": 1.0}
 
@@ -411,27 +455,27 @@ def validate_edit_plan(plan: dict) -> dict:
         start, end = float(item.get("start", -1)), float(item.get("end", -1))
         source_duration = float(item.get("source_duration", 0))
         if start < 0 or end <= start:
-            blockers.append(f"第 {i + 1} 个镜头入点/出点无效")
+            blockers.append(_(f"第 {i + 1} 个镜头入点/出点无效", f"Shot {i + 1}: invalid in/out point"))
         if source_duration and end > source_duration + .04:
-            blockers.append(f"第 {i + 1} 个镜头超出原素材时长")
+            blockers.append(_(f"第 {i + 1} 个镜头超出原素材时长", f"Shot {i + 1} runs past the end of its source"))
         if end - start < .45:
-            warnings.append(f"第 {i + 1} 个镜头短于 0.45 秒，可能造成闪切")
+            warnings.append(_(f"第 {i + 1} 个镜头短于 0.45 秒，可能造成闪切", f"Shot {i + 1} is shorter than 0.45 s and may flash"))
         role = str(item.get("role") or "")
         if role not in ALLOWED_ROLES:
-            item["role"] = "development"; repairs.append(f"第 {i + 1} 个镜头角色已降级为 development")
+            item["role"] = "development"; repairs.append(_(f"第 {i + 1} 个镜头角色已降级为 development", f"Shot {i + 1}: role downgraded to development"))
         transition = str(item.get("transition") or "none")
         if transition not in ALLOWED_TRANSITIONS:
-            item["transition"] = "none"; repairs.append(f"第 {i + 1} 个镜头未知转场已降级为直接切换")
+            item["transition"] = "none"; repairs.append(_(f"第 {i + 1} 个镜头未知转场已降级为直接切换", f"Shot {i + 1}: unknown transition downgraded to a cut"))
         mask = str(item.get("mask_shape") or "none")
         if mask not in ALLOWED_MASKS:
-            item["mask_shape"] = "none"; repairs.append(f"第 {i + 1} 个镜头未知蒙版已关闭")
+            item["mask_shape"] = "none"; repairs.append(_(f"第 {i + 1} 个镜头未知蒙版已关闭", f"Shot {i + 1}: unknown mask disabled"))
         for key, default in (("mask_x", .5), ("mask_y", .5), ("mask_width", .72),
                              ("mask_height", .72), ("mask_opacity", 1.)):
             item[key] = max(0., min(1., float(item.get(key, default))))
         item["mask_feather"] = max(1., min(120., float(item.get("mask_feather", 24.))))
         key = (item.get("source_path"), round(start, 2), round(end, 2))
         if key in seen_ranges:
-            blockers.append(f"第 {i + 1} 个镜头与前面镜头完全重复")
+            blockers.append(_(f"第 {i + 1} 个镜头与前面镜头完全重复", f"Shot {i + 1} exactly duplicates an earlier shot"))
         seen_ranges.add(key)
 
     first_body = 0
@@ -446,15 +490,15 @@ def validate_edit_plan(plan: dict) -> dict:
     )
     ratio = chronological / len(comparable) if comparable else 1.0
     if plan.get("capture_order_locked") and ratio < 1:
-        blockers.append("钩子后的正文仍无法满足真实拍摄顺序，请检查缺失的拍摄时间")
+        blockers.append(_("钩子后的正文仍无法满足真实拍摄顺序，请检查缺失的拍摄时间", "The body after the hook still cannot follow the real shooting order; check for missing capture times"))
 
     total = round(sum(max(0, float(x.get("end", 0)) - float(x.get("start", 0))) for x in decisions), 3)
     target = max(.1, float(plan.get("target_duration", total)))
     if total < target * .72:
-        warnings.append(f"方案只有 {total:.1f} 秒，明显短于目标 {target:.1f} 秒")
+        warnings.append(_(f"方案只有 {total:.1f} 秒，明显短于目标 {target:.1f} 秒", f"The plan runs only {total:.1f} s, well short of the {target:.1f} s target"))
     expressive = sum(str(x.get("transition", "none")) not in ("none", "fade", "dissolve") for x in decisions[1:])
     if expressive > max(1, len(decisions) // 5):
-        warnings.append("花式转场比例偏高，建议只保留有动作或空间依据的切点")
+        warnings.append(_("花式转场比例偏高，建议只保留有动作或空间依据的切点", "Too many expressive transitions; keep them only where action or space justifies the cut"))
     return {"ok": not blockers, "blockers": blockers, "warnings": warnings, "repairs": repairs,
             "duration": total, "chronology_ratio": round(ratio, 4)}
 
@@ -495,56 +539,61 @@ def plan_to_overlays(plan:dict,overlay_class)->list:
 
 def plan_preview_text(plan: dict) -> str:
     report = plan.get("validation") or validate_edit_plan(plan)
-    status = "可以应用" if report["ok"] else "已阻止"
+    language = plan_language(plan)
+    _ = lambda zh, en: tr(language, zh, en)
+    status = _("可以应用", "can be applied") if report["ok"] else _("已阻止", "blocked")
     lines = [
-        f"AI 剪辑方案 {plan.get('plan_id', '')[:8]} · {status}",
-        f"预计 {report['duration']:.1f} 秒 · {len(plan.get('decisions') or [])} 个片段 · "
-        f"正文顺序一致率 {report['chronology_ratio'] * 100:.0f}%",
-        "拍摄顺序锁：" + ("开启（钩子后不可倒序）" if plan.get("capture_order_locked") else "关闭"),
+        _(f"AI 剪辑方案 {plan.get('plan_id', '')[:8]} · {status}", f"AI edit plan {plan.get('plan_id', '')[:8]} · {status}"),
+        _(f"预计 {report['duration']:.1f} 秒 · {len(plan.get('decisions') or [])} 个片段 · 正文顺序一致率 {report['chronology_ratio'] * 100:.0f}%",
+          f"about {report['duration']:.1f} s · {len(plan.get('decisions') or [])} clip(s) · body chronology {report['chronology_ratio'] * 100:.0f}%"),
+        _("拍摄顺序锁：" + ("开启（钩子后不可倒序）" if plan.get("capture_order_locked") else "关闭"),
+          "Capture-order lock: " + ("on (no going backwards after the hook)" if plan.get("capture_order_locked") else "off")),
     ]
     if report["blockers"]:
-        lines.append("\n阻止原因：\n- " + "\n- ".join(report["blockers"]))
+        lines.append(_("\n阻止原因：\n- ", "\nBlockers:\n- ") + "\n- ".join(report["blockers"]))
     if report["warnings"]:
-        lines.append("\n提醒：\n- " + "\n- ".join(report["warnings"]))
+        lines.append(_("\n提醒：\n- ", "\nWarnings:\n- ") + "\n- ".join(report["warnings"]))
     if report["repairs"]:
-        lines.append("\n自动修复：\n- " + "\n- ".join(report["repairs"]))
+        lines.append(_("\n自动修复：\n- ", "\nAuto repairs:\n- ") + "\n- ".join(report["repairs"]))
     creative = plan.get("creative_direction") or {}
     if creative:
         lines.append(
-            f"\n高级开篇：{creative.get('name')} · 约 {float(creative.get('duration_hint', 0)):.1f} 秒\n"
-            f"{creative.get('summary', '')}"
+            _(f"\n高级开篇：{creative.get('name')} · 约 {float(creative.get('duration_hint', 0)):.1f} 秒\n",
+              f"\nAdvanced opening: {creative.get('name')} · about {float(creative.get('duration_hint', 0)):.1f} s\n")
+            + f"{creative.get('summary', '')}"
         )
         for shot in creative.get("shots") or []:
             transition = shot.get("transition") or "none"
             lines.append(
-                f"  开篇镜头 {int(shot.get('ordinal', 0)) + 1}：蒙版 {shot.get('mask', 'none')} · "
-                f"转场 {transition} · {shot.get('purpose', '')}"
+                _(f"  开篇镜头 {int(shot.get('ordinal', 0)) + 1}：蒙版 {shot.get('mask', 'none')} · 转场 {transition} · {shot.get('purpose', '')}",
+                  f"  Opening shot {int(shot.get('ordinal', 0)) + 1}: mask {shot.get('mask', 'none')} · transition {transition} · {shot.get('purpose', '')}")
             )
         if creative.get("sounds"):
-            lines.append("  自动音效：" + "、".join(
+            lines.append(_("  自动音效：", "  Auto sound cues: ") + _("、", ", ").join(
                 f"{x.get('effect_id')}@{float(x.get('start',0)):.2f}s" for x in creative.get("sounds") or []
             ))
     overlays=plan.get("overlay_tracks") or []
     if overlays:
-        lines.append(f"  AI 多轨合成：{len(overlays)} 个独立叠加层")
+        lines.append(_(f"  AI 多轨合成：{len(overlays)} 个独立叠加层", f"  AI multitrack compositing: {len(overlays)} independent overlay layer(s)"))
         for item in overlays:
-            lines.append(f"    V{int(item.get('track',2))} · {item.get('source_name')} · 时间线 {float(item.get('timeline_start',0)):.2f}s · {item.get('mask_shape','none')} · {item.get('reason','')}")
+            lines.append(f"    V{int(item.get('track',2))} · {item.get('source_name')} · " + _("时间线", "timeline") + f" {float(item.get('timeline_start',0)):.2f}s · {item.get('mask_shape','none')} · {item.get('reason','')}")
     global_direction=plan.get("global_creative_direction") or {}
     if global_direction:
-        lines.append(f"\n全片创意编排：{int(global_direction.get('accent_count',0))} 个重点事件 · 最小间隔 {float(global_direction.get('minimum_accent_spacing',0)):.1f}s · 自动配乐 {global_direction.get('music_id','')}")
+        lines.append(_(f"\n全片创意编排：{int(global_direction.get('accent_count',0))} 个重点事件 · 最小间隔 {float(global_direction.get('minimum_accent_spacing',0)):.1f}s · 自动配乐 {global_direction.get('music_id','')}",
+                       f"\nWhole-film treatment: {int(global_direction.get('accent_count',0))} accent event(s) · minimum spacing {float(global_direction.get('minimum_accent_spacing',0)):.1f}s · auto music {global_direction.get('music_id','')}"))
         lines.append("  " + str(global_direction.get("rule", "")))
         for event in global_direction.get("events") or []:
             if event.get("accent"):
-                lines.append(f"  {float(event.get('timeline_start',0)):06.2f}s · {event.get('event')} · {event.get('motion')} · 字幕 {event.get('caption_effect')}")
-    lines.append("\n镜头方案：")
+                lines.append(f"  {float(event.get('timeline_start',0)):06.2f}s · {event.get('event')} · {event.get('motion')} · " + _("字幕", "caption") + f" {event.get('caption_effect')}")
+    lines.append(_("\n镜头方案：", "\nShot plan:"))
     for i, item in enumerate(plan.get("decisions") or []):
         lines.append(
             f"{i + 1:02d}. [{item.get('role')}] {item.get('source_name')} "
             f"{float(item.get('start', 0)):.2f}-{float(item.get('end', 0)):.2f}s · "
-            f"{item.get('reason') or '有效镜头'} · 蒙版 {item.get('mask_shape', 'none')} · "
-            f"转场 {item.get('transition', 'none')}" +
-            (f" · 动效 {item.get('motion_effect')} · 字效 {item.get('caption_effect')}" if item.get('motion_effect') not in (None,'none') else "") +
-            (f" · 个性标题 {item.get('title_effect')}「{item.get('title_text','')}」" if item.get('title_effect') else "")
+            f"{item.get('reason') or _('有效镜头', 'valid shot')} · " + _("蒙版", "mask") + f" {item.get('mask_shape', 'none')} · "
+            + _("转场", "transition") + f" {item.get('transition', 'none')}" +
+            (_(f" · 动效 {item.get('motion_effect')} · 字效 {item.get('caption_effect')}", f" · motion {item.get('motion_effect')} · caption effect {item.get('caption_effect')}") if item.get('motion_effect') not in (None,'none') else "") +
+            (_(f" · 个性标题 {item.get('title_effect')}「{item.get('title_text','')}」", f" · title effect {item.get('title_effect')} \u201c{item.get('title_text','')}\u201d") if item.get('title_effect') else "")
         )
     return "\n".join(lines)
 

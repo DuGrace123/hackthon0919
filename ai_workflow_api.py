@@ -19,6 +19,9 @@ class PlanRequest(BaseModel):
     target_duration: float = Field(default=30, ge=5, le=180, allow_inf_nan=False, strict=True)
     prompt: StrictStr = Field(default='', max_length=2000)
     cloud_consent: StrictBool = False
+    opening: Literal['hook', 'chronological'] = 'hook'
+    style: StrictStr = Field(default='', max_length=60)
+    language: Literal['zh', 'en'] = 'zh'
 
 
 class ApplyRequest(BaseModel):

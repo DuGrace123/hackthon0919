@@ -26,6 +26,7 @@ from builtin_music import music_by_id, resolve_music
 from builtin_sound_effects import resolve_sfx, sfx_by_id
 from creative_treatment import apply_global_creative_treatment
 from edit_plan import apply_opening_treatment, build_edit_plan, opening_preset_choices, plan_preview_text, plan_to_clips, plan_to_overlays
+from plan_i18n import ROLE_LABELS as _ROLE_TABLES, TRANSITION_LABELS as _TRANSITION_TABLES, named, normalize_language, role_label, style_label, tr, transition_label
 from video_editing_engine import Clip, OverlayClip, Project, SFXCue
 
 ROOT = Path(__file__).resolve().parent
@@ -98,12 +99,11 @@ def validate_cloud_config(config: APIConfig | None) -> APIConfig:
     return config
 
 
-ROLE_LABELS = {'hook': '冷开场钩子', 'setup': '铺垫', 'development': '发展', 'climax': '高潮', 'outro': '收尾', 'broll': '空镜'}
-TRANSITION_LABELS = {'none': '直接切换', 'cut': '直接切换', 'fade': '淡入淡出', 'dissolve': '叠化', 'wipe_left': '向左擦除',
-                     'wipe_right': '向右擦除', 'slide_left': '向左滑动', 'slide_right': '向右滑动', 'circle': '圆形遮罩',
-                     'smooth': '平滑过渡', 'pip_zoom': '画中画推近', 'tear_left': '左撕裂', 'tear_right': '右撕裂',
-                     'pixelize': '像素化', 'squeeze': '挤压', 'radial': '径向', 'fade_black': '黑场', 'fade_white': '白场',
-                     'cover_left': '左覆盖', 'reveal_right': '右揭示'}
+ROLE_LABELS = _ROLE_TABLES['zh']
+TRANSITION_LABELS = _TRANSITION_TABLES['zh']
+
+LOCAL_REASON = {'zh': '本地场景与时长规则选择，未分析语义或转写对白',
+                'en': 'Chosen by local scene-change and duration rules; no semantic analysis or transcription'}
 
 
 def capture_stamps(sources: list) -> tuple[list[str], str]:
@@ -163,19 +163,20 @@ def analyze_local(ffmpeg: str, source: MediaSource, checkpoint: Callable) -> lis
     if len(windows) > 120:
         windows = [windows[round(i * (len(windows) - 1) / 119)] for i in range(120)]
     return [dict(start=round(a, 3), end=round(b, 3), score=60,
-                 caption='', reason='本地场景与时长规则选择，未分析语义或转写对白',
+                 caption='', reason=LOCAL_REASON['zh'],
                  role='development', stage='other', stability=50, motion=50,
                  audio_value=0, visual_signature=f'{source.id}:{a:.3f}') for a, b in windows]
 
 
-def _dedupe_captions(sequence: list[dict]) -> list[str]:
+def _dedupe_captions(sequence: list[dict], language: str = 'zh') -> list[str]:
     """The same spoken line often spans two adjacent windows; keep the caption once."""
     notes, previous = [], ''
     for index, shot in enumerate(sequence):
         caption = str(shot.get('caption') or '').strip()
         if caption and caption.lower() == previous.lower():
             shot['caption'] = ''
-            notes.append(f'第 {index + 1} 个镜头与上一镜头对白相同，字幕只保留一次')
+            notes.append(tr(language, f'第 {index + 1} 个镜头与上一镜头对白相同，字幕只保留一次',
+                            f"Shot {index + 1} repeats the previous shot's dialogue; the caption is kept once"))
         elif caption:
             previous = caption
     return notes
@@ -190,10 +191,13 @@ def _build_report(record: _Record, plan: dict, shots: list[dict], summaries: lis
     """Human-readable explanation of the plan: story line, structure, techniques, source usage."""
     validation = plan.get('validation') or {}
     mode = record.public['mode']
+    lang = record.language
+    _ = lambda zh, en: tr(lang, zh, en)
     story = str(strategy.get('strategy') or '').strip()
     if not story:
-        story = ('本地模式按画面场景切换和目标时长挑选镜头，没有理解画面语义，也没有转写对白；'
-                 '正片按拍摄顺序推进。' if mode == 'local' else '模型未返回故事线说明。')
+        story = (_('本地模式按画面场景切换和目标时长挑选镜头，没有理解画面语义，也没有转写对白；正片按拍摄顺序推进。',
+                   'Local mode picks shots from scene changes and the target duration; it does not understand the picture or transcribe dialogue. The body runs in shooting order.')
+                 if mode == 'local' else _('模型未返回故事线说明。', 'The model returned no story-line note.'))
     roles = [shot['role'] for shot in shots]
     role_counts = {role: roles.count(role) for role in ROLE_LABELS if role in roles}
     transitions = [shot['transition'] for shot in shots[1:]]
@@ -202,30 +206,37 @@ def _build_report(record: _Record, plan: dict, shots: list[dict], summaries: lis
         transition_counts[item] = transition_counts.get(item, 0) + 1
     total = float(validation.get('duration') or 0)
     average = total / len(shots) if shots else 0
-    basis_text = ('按素材文件中的真实拍摄时间排列' if order_basis == 'capture_time'
-                  else '素材缺少可靠的拍摄时间，按素材列表中的顺序作为拍摄顺序')
+    basis_text = (_('按素材文件中的真实拍摄时间排列', 'Ordered by the real capture time stored in the source files') if order_basis == 'capture_time'
+                  else _('素材缺少可靠的拍摄时间，按素材列表中的顺序作为拍摄顺序', 'Sources lack reliable capture times, so the order of the source list is treated as the shooting order'))
+    ratio = float(validation.get('chronology_ratio', 1)) * 100
     structure = [
-        ('纯时间顺序：所有镜头按拍摄先后排列，不设冷开场' if opening == 'chronological'
-         else '冷开场：先用一个最有吸引力的镜头做钩子，之后正片按拍摄顺序推进'),
+        (_('纯时间顺序：所有镜头按拍摄先后排列，不设冷开场', 'Strict chronological order: every shot follows capture order, no cold open') if opening == 'chronological'
+         else _('冷开场：先用一个最有吸引力的镜头做钩子，之后正片按拍摄顺序推进', 'Cold open: the most engaging shot serves as the hook, then the body runs in shooting order')),
         basis_text,
-        ('拍摄顺序锁已开启：钩子之后的正文不允许倒序' if plan.get('capture_order_locked') else '拍摄顺序锁关闭：允许模型自由排序'),
-        f"正文顺序一致率 {float(validation.get('chronology_ratio', 1)) * 100:.0f}%",
-        '结构：' + ' → '.join(f'{ROLE_LABELS[role]} {count} 个' for role, count in role_counts.items()),
+        (_('拍摄顺序锁已开启：钩子之后的正文不允许倒序', 'Capture-order lock on: the body after the hook cannot run backwards') if plan.get('capture_order_locked')
+         else _('拍摄顺序锁关闭：允许模型自由排序', 'Capture-order lock off: the model may order shots freely')),
+        _(f"正文顺序一致率 {ratio:.0f}%", f"Body chronology {ratio:.0f}%"),
+        _('结构：', 'Structure: ') + ' → '.join(_(f'{role_label(lang, role)} {count} 个', f'{role_label(lang, role)} × {count}') for role, count in role_counts.items()),
     ]
-    techniques = [f'共 {len(shots)} 个镜头，平均每镜头 {average:.1f} 秒，总长 {total:.1f} 秒（目标 {float(plan.get("target_duration", 0)):.1f} 秒）']
+    target = float(plan.get("target_duration", 0))
+    techniques = [_(f'共 {len(shots)} 个镜头，平均每镜头 {average:.1f} 秒，总长 {total:.1f} 秒（目标 {target:.1f} 秒）',
+                    f'{len(shots)} shots, {average:.1f} s on average, {total:.1f} s in total (target {target:.1f} s)')]
     for name, count in sorted(transition_counts.items(), key=lambda pair: -pair[1]):
-        techniques.append(f'{TRANSITION_LABELS.get(name, name)} {count} 处')
+        techniques.append(_(f'{transition_label(lang, name)} {count} 处', f'{transition_label(lang, name)} × {count}'))
     captioned = sum(1 for shot in shots if shot['caption'])
     if captioned:
-        techniques.append(f'{captioned} 个镜头带字幕，字幕取自真实语音转写' if mode == 'cloud' else f'{captioned} 个镜头带字幕')
+        techniques.append((_(f'{captioned} 个镜头带字幕，字幕取自真实语音转写', f'{captioned} shot(s) captioned from the real speech transcript') if mode == 'cloud'
+                           else _(f'{captioned} 个镜头带字幕', f'{captioned} shot(s) with captions')))
     if notes:
-        techniques.append(f'相邻镜头重复对白去重 {len(notes)} 处')
+        techniques.append(_(f'相邻镜头重复对白去重 {len(notes)} 处', f'Duplicate dialogue removed between adjacent shots: {len(notes)}'))
     if style:
-        techniques.append(f'导演风格：{style}')
+        techniques.append(_(f'导演风格：{style}', f'Directing style: {style_label(lang, style)}'))
     if mode == 'cloud':
-        techniques.append('云端分析：抽帧联系图 + 语音转写，模型评估每个候选镜头的动作、稳定性和叙事价值后选片')
+        techniques.append(_('云端分析：抽帧联系图 + 语音转写，模型评估每个候选镜头的动作、稳定性和叙事价值后选片',
+                            'Cloud analysis: contact sheets + speech transcription; the model scored every candidate shot for action, stability and narrative value before selecting'))
     else:
-        techniques.append('本地分析：FFmpeg 场景切换检测，按时长与多样性规则选片')
+        techniques.append(_('本地分析：FFmpeg 场景切换检测，按时长与多样性规则选片',
+                            'Local analysis: FFmpeg scene-change detection with duration and variety rules'))
     techniques.extend(extras or [])
     sources = []
     for index, source in enumerate(record.sources):
@@ -239,15 +250,16 @@ def _build_report(record: _Record, plan: dict, shots: list[dict], summaries: lis
             'capture_time': _format_stamp(plan['source_catalog'][index]['capture_order']) if order_basis == 'capture_time' else '',
             'order': index + 1,
         })
-    text_lines = ['故事线：' + story, '']
-    text_lines += ['结构与顺序：'] + [f'- {line}' for line in structure] + ['']
-    text_lines += ['剪辑手法：'] + [f'- {line}' for line in techniques] + ['']
-    text_lines += ['素材使用：'] + [
-        f"- {item['order']}. {item['name']} · {item['duration']:.1f}s · 选用 {item['shots_used']} 个镜头 / {item['seconds_used']:.1f}s"
+    text_lines = [_('故事线：', 'Story line: ') + story, '']
+    text_lines += [_('结构与顺序：', 'Structure and order:')] + [f'- {line}' for line in structure] + ['']
+    text_lines += [_('剪辑手法：', 'Editing techniques:')] + [f'- {line}' for line in techniques] + ['']
+    text_lines += [_('素材使用：', 'Source usage:')] + [
+        f"- {item['order']}. {item['name']} · {item['duration']:.1f}s · "
+        + _(f"选用 {item['shots_used']} 个镜头 / {item['seconds_used']:.1f}s", f"{item['shots_used']} shot(s) / {item['seconds_used']:.1f}s used")
         + (f" · {item['summary']}" if item['summary'] else '') for item in sources] + ['']
     text_lines.append(plan_preview_text(plan))
     return {'story': story, 'structure': structure, 'techniques': techniques, 'sources': sources,
-            'order_basis': order_basis, 'opening': opening, 'style': style,
+            'order_basis': order_basis, 'opening': opening, 'style': style, 'language': lang,
             'chronology_ratio': float(validation.get('chronology_ratio', 1)),
             'report_text': '\n'.join(text_lines)}
 
@@ -266,6 +278,7 @@ class _Record:
     base_plan: dict | None = None
     context: dict = field(default_factory=dict)
     preset: str = 'smart'
+    language: str = 'zh'
     applied_revision: int | None = None
     applied_token: str | None = None
 
@@ -334,9 +347,12 @@ class AIWorkflow:
 
     def create(self, project_id: str, owner_id: str, *, media_ids: list[str], revision: int,
                mode: str = 'local', target_duration: float = 30, prompt: str = '',
-               cloud_consent: bool = False, opening: str = 'hook', style: str = '') -> dict:
+               cloud_consent: bool = False, opening: str = 'hook', style: str = '', language: str = 'zh') -> dict:
         _identifier(project_id)
         _revision(revision)
+        if not isinstance(language, str) or len(language) > 16:
+            raise WorkflowError('invalid_language', '语言无效。', 422)
+        language = normalize_language(language)
         if not owner_id:
             raise WorkflowError('unauthorized', '请先登录。', 401)
         if mode not in ('local', 'cloud'):
@@ -376,9 +392,10 @@ class AIWorkflow:
                     raise WorkflowError('busy', 'AI 服务暂不可用，请稍后重试。', 503)
                 plan_id = uuid.uuid4().hex
                 public = {'id': plan_id, 'project_id': project_id, 'base_revision': revision,
-                          'mode': mode, 'status': 'queued', 'progress': 0, 'message': '等待分析',
+                          'mode': mode, 'status': 'queued', 'progress': 0, 'language': language,
+                          'message': tr(language, '等待分析', 'Waiting for analysis'),
                           'result': None, 'error': None}
-                record = _Record(public, owner_id, sources, fingerprints, snapshot, time.monotonic() + self.ttl)
+                record = _Record(public, owner_id, sources, fingerprints, snapshot, time.monotonic() + self.ttl, language=language)
                 self._records[plan_id] = record
                 self._executor.submit(self._generate, record, target_duration, prompt, opening, style)
                 return copy.deepcopy(public)
@@ -421,7 +438,7 @@ class AIWorkflow:
             if record.public['status'] not in ('failed', 'cancelled'):
                 record.cancelled.set()
                 record.plan = None
-                record.public.update(status='cancelled', message='已取消，工程未改变', result=None)
+                record.public.update(status='cancelled', message=tr(record.language, '已取消，工程未改变', 'Cancelled, project unchanged'), result=None)
             return copy.deepcopy(record.public)
 
     def _checkpoint(self, record: _Record):
@@ -446,11 +463,15 @@ class AIWorkflow:
             checkpoint = lambda: self._checkpoint(record)
             analyses, summaries = [], []
             stamps, order_basis = capture_stamps(record.sources)
+            lang = record.language
             director_prompt = prompt + (f'\n导演风格：{style}' if style else '')
+            if lang == 'en':
+                director_prompt += ('\nOutput language: write the summary, strategy, chapter names and reasons in English. '
+                                    'Captions must stay faithful to the spoken words.')
             with tempfile.TemporaryDirectory(prefix='figstudio-ai-') as scratch:
                 for index, source in enumerate(record.sources):
                     self._progress(record, 5 + int(index / len(record.sources) * 70),
-                                   f'分析素材 {index + 1}/{len(record.sources)}')
+                                   tr(lang, f'分析素材 {index + 1}/{len(record.sources)}', f'Analyzing source {index + 1}/{len(record.sources)}'))
                     summary = {}
                     if record.public['mode'] == 'cloud':
                         segments = analyze_video(self.ffmpeg, self.config, str(source.path), source.duration,
@@ -458,11 +479,15 @@ class AIWorkflow:
                                                  report=summary)
                     else:
                         segments = self.local_analyzer(self.ffmpeg, source, checkpoint)
+                        if lang != 'zh':
+                            for segment in segments:
+                                if segment.get('reason') == LOCAL_REASON['zh']:
+                                    segment['reason'] = LOCAL_REASON[lang]
                     summaries.append(summary)
                     analyses.append({'meta': {'path': str(source.path), 'name': Path(source.name.replace('\\', '/')).name[:200],
                                              'duration': source.duration, 'has_audio': source.has_audio,
                                              'capture_order': stamps[index]}, 'segments': segments})
-                self._progress(record, 80, '规划镜头顺序与时长')
+                self._progress(record, 80, tr(lang, '规划镜头顺序与时长', 'Planning shot order and durations'))
                 strategy = {}
                 if record.public['mode'] == 'cloud':
                     sequence = plan_sequence(self.config, analyses, target, director_prompt, allow_fallback=False, report=strategy)
@@ -471,8 +496,8 @@ class AIWorkflow:
                 checkpoint()
                 if opening == 'chronological':
                     sequence = chronological_sequence(sequence, analyses)
-                notes = _dedupe_captions(sequence)
-                base_plan = build_edit_plan(sequence, analyses, target, director_prompt, record.public['mode'])
+                notes = _dedupe_captions(sequence, lang)
+                base_plan = build_edit_plan(sequence, analyses, target, director_prompt, record.public['mode'], language=lang)
                 for decision, beat in zip(base_plan['decisions'], sequence):
                     decision['chapter'] = str(beat.get('chapter') or '')[:120]
                     decision['stage'] = str(beat.get('stage') or '')[:30]
@@ -488,17 +513,17 @@ class AIWorkflow:
                     checkpoint()
                     record.plan, record.base_plan, record.context, record.preset = plan, base_plan, context, 'smart'
                     record.expires_at = time.monotonic() + self.ttl
-                    record.public.update(status='ready', progress=100, message='方案已生成，等待确认应用', result=result)
+                    record.public.update(status='ready', progress=100, message=tr(lang, '方案已生成，等待确认应用', 'Plan ready, waiting for confirmation'), result=result)
         except AnalysisCancelled:
             with self._lock:
-                record.public.update(status='cancelled', message='已取消，工程未改变', result=None)
+                record.public.update(status='cancelled', message=tr(record.language, '已取消，工程未改变', 'Cancelled, project unchanged'), result=None)
         except Exception as exc:
             with self._lock:
                 if not record.cancelled.is_set():
                     safe = isinstance(exc, (AIRequestError, WorkflowError))
-                    record.public.update(status='failed', message='分析失败，工程未改变', result=None,
+                    record.public.update(status='failed', message=tr(record.language, '分析失败，工程未改变', 'Analysis failed, project unchanged'), result=None,
                                          error={'code': exc.code if safe else 'analysis_failed',
-                                                'message': str(exc) if safe else '分析失败，请检查素材后重试。',
+                                                'message': str(exc) if safe else tr(record.language, '分析失败，请检查素材后重试。', 'Analysis failed. Check the footage and try again.'),
                                                 'retryable': bool(getattr(exc, 'retryable', False))})
         finally:
             record.finished.set()
@@ -533,15 +558,22 @@ class AIWorkflow:
         creative = plan.get('creative_direction') or {}
         direction = plan.get('global_creative_direction') or {}
         music = music_by_id(str(direction.get('music_id') or ''))
+        music_name = named(record.language, music)
         overlays, cues = plan.get('overlay_tracks') or [], plan.get('sound_cues') or []
         keep_music = bool(record.snapshot.project.bgm)
-        extras = [f"高级开篇「{creative.get('name', '')}」：前 {len(creative.get('shots') or [])} 个镜头写入蒙版、位置、羽化和转场，{len(overlays)} 个叠加层，{len(creative.get('sounds') or [])} 个开篇音效",
-                  f"全片创意编排：{int(direction.get('accent_count', 0))} 个重点事件用动效与字幕强调，最小间隔 {float(direction.get('minimum_accent_spacing', 0)):.1f} 秒，共 {len(cues)} 个同步音效"
-                  + (f"，自动配乐「{music['name']}」" if music and not keep_music else '，保留已有背景音乐' if keep_music else '')]
+        lang = record.language
+        opening_shots, opening_sounds = len(creative.get('shots') or []), len(creative.get('sounds') or [])
+        accents, spacing = int(direction.get('accent_count', 0)), float(direction.get('minimum_accent_spacing', 0))
+        extras = [tr(lang, f"高级开篇「{creative.get('name', '')}」：前 {opening_shots} 个镜头写入蒙版、位置、羽化和转场，{len(overlays)} 个叠加层，{opening_sounds} 个开篇音效",
+                     f"Advanced opening \u201c{creative.get('name', '')}\u201d: masks, positions, feathering and transitions written into the first {opening_shots} shot(s), {len(overlays)} overlay layer(s), {opening_sounds} opening sound cue(s)"),
+                  tr(lang, f"全片创意编排：{accents} 个重点事件用动效与字幕强调，最小间隔 {spacing:.1f} 秒，共 {len(cues)} 个同步音效",
+                     f"Whole-film treatment: {accents} accent event(s) emphasised with motion and caption effects, minimum spacing {spacing:.1f} s, {len(cues)} synced sound cue(s)")
+                  + (tr(lang, f"，自动配乐「{music_name}」", f", auto music \u201c{music_name}\u201d") if music and not keep_music
+                     else tr(lang, '，保留已有背景音乐', ', existing background music kept') if keep_music else '')]
         report_payload = _build_report(record, plan, shots, context['summaries'], context['strategy'], context['order_basis'],
                                        context['opening'], context['style'], context['notes'], extras)
         return {'shots': shots, 'duration': report.get('duration', 0),
-                'summary': f"共 {len(shots)} 个镜头，预计 {float(report.get('duration', 0)):.1f} 秒",
+                'summary': tr(lang, f"共 {len(shots)} 个镜头，预计 {float(report.get('duration', 0)):.1f} 秒", f"{len(shots)} shots, about {float(report.get('duration', 0)):.1f} s"),
                 'validation': {'ok': bool(report.get('ok')), 'blockers': list(report.get('blockers') or []),
                                'warnings': list(report.get('warnings') or []),
                                'repairs': list(report.get('repairs') or []) + list(context['notes']),
@@ -551,7 +583,7 @@ class AIWorkflow:
                             'remove_sound_effects': len(record.snapshot.project.sfx),
                             'add_overlays': len(overlays), 'add_sound_effects': len(cues),
                             'preserve_background_music': keep_music,
-                            'music': '' if keep_music or not music else music['name']},
+                            'music': '' if keep_music or not music else music_name},
                 'warnings': list(report.get('warnings') or []), 'repairs': list(report.get('repairs') or []) + list(context['notes']),
                 'capture_order_locked': plan['capture_order_locked'],
                 'creative': {'preset_id': str(creative.get('preset_id') or ''), 'requested': preset,
@@ -559,10 +591,10 @@ class AIWorkflow:
                              'duration_hint': float(creative.get('duration_hint', 0) or 0),
                              'shot_count': len(creative.get('shots') or []), 'overlay_count': len(overlays),
                              'sound_count': len(creative.get('sounds') or [])},
-                'opening_presets': [{'value': value, 'name': name} for name, value in opening_preset_choices()],
+                'opening_presets': [{'value': value, 'name': name} for name, value in opening_preset_choices(lang)],
                 'global_direction': {'accent_count': int(direction.get('accent_count', 0)),
                                      'minimum_accent_spacing': float(direction.get('minimum_accent_spacing', 0)),
-                                     'music_id': str(direction.get('music_id') or ''), 'music_name': music['name'] if music else '',
+                                     'music_id': str(direction.get('music_id') or ''), 'music_name': music_name,
                                      'rule': str(direction.get('rule') or '')},
                 'report': report_payload}
 
@@ -578,7 +610,7 @@ class AIWorkflow:
             result = self._describe(record, plan, record.context, preset)
             record.plan, record.preset = plan, preset
             record.public['result'] = result
-            record.public['message'] = f"已切换开篇方案：{result['creative']['name']}"
+            record.public['message'] = tr(record.language, f"已切换开篇方案：{result['creative']['name']}", f"Opening preset switched: {result['creative']['name']}")
             return copy.deepcopy(record.public)
 
     def apply(self, project_id: str, plan_id: str, owner_id: str, *, revision: int, confirm: bool) -> dict:
@@ -626,7 +658,7 @@ class AIWorkflow:
             saved = self.backend.commit_project(project_id, owner_id, candidate, revision, **options)
             record.applied_revision = saved.revision
             record.applied_token = saved.version_token
-            record.public.update(status='applied', revision=saved.revision, message='方案已应用，可撤销')
+            record.public.update(status='applied', revision=saved.revision, message=tr(record.language, '方案已应用，可撤销', 'Plan applied, can be undone'))
             return copy.deepcopy(record.public)
 
     def undo(self, project_id: str, plan_id: str, owner_id: str, *, revision: int) -> dict:
@@ -639,7 +671,7 @@ class AIWorkflow:
                 raise RevisionConflict()
             options = {'expected_token': record.applied_token} if record.applied_token is not None else {}
             saved = self.backend.commit_project(project_id, owner_id, copy.deepcopy(record.snapshot.project), revision, **options)
-            record.public.update(status='undone', revision=saved.revision, message='已恢复应用前的工程')
+            record.public.update(status='undone', revision=saved.revision, message=tr(record.language, '已恢复应用前的工程', 'Project restored to the state before apply'))
             return copy.deepcopy(record.public)
 
     def close(self):

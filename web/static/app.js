@@ -41,7 +41,8 @@ const translations = {
     aiNoteFull: '方案中的蒙版、高级转场、叠加层、音效与配乐会随镜头一起应用到时间线（已有背景音乐则保留）。确认仅替换一次时间线；之后仍可删减或在检查器修改，并可一键撤销。', aiChangeAdd: '新增 {overlays} 个叠加层与 {sfx} 个音效', aiChangeMusicSet: '自动配乐「{name}」', aiShotCards: '镜头卡片（点击可在监视器预览）',
     deleteNamedConfirm: '确定从时间线移除「{name}」吗？素材库中的原文件不会删除。',
     removeMedia: '删除素材', removeNamedMedia: '删除素材：{name}', removeMediaConfirm: '确定删除素材 {name} 吗？文件会从素材库中删除，无法恢复。', mediaRemoved: '已删除素材 {name}。', mediaInUse: '{name} 正在时间线上使用，请先从时间线移除。',
-    aiMaskPrefix: '蒙版：{value}', aiMotionPrefix: '动效：{value}', aiPresetSwitching: '正在切换开篇方案…', aiPresetSwitched: '开篇方案已切换：{name}', timelineExtras: 'V2+ 叠加 {overlays} · 音效 {sfx} · 配乐 {music}', noMusic: '无'
+    aiMaskPrefix: '蒙版：{value}', aiMotionPrefix: '动效：{value}', aiPresetSwitching: '正在切换开篇方案…', aiPresetSwitched: '开篇方案已切换：{name}', timelineExtras: 'V2+ 叠加 {overlays} · 音效 {sfx} · 配乐 {music}', noMusic: '无',
+    aiLocalNotice: '本地模式按场景和时长选片，不上传素材、不生成语音字幕。', aiCloudNotice: '云端分析会发送抽帧图片、音频和剪辑要求，可能产生 API 费用。', aiLanguageMismatch: '该方案是在另一种界面语言下生成的；重新生成即可获得当前语言的报告。'
   },
   en: {
     userGuide: 'Guide', guideNewTab: 'User guide in Chinese (opens a new tab)',
@@ -84,7 +85,8 @@ const translations = {
     aiNoteFull: 'Masks, advanced transitions, overlays, sound cues and music are applied together with the shots (existing background music is kept). Confirming replaces the timeline once; you can still trim or edit in the inspector afterwards, and undo in one click.', aiChangeAdd: 'adds {overlays} overlay(s) and {sfx} sound cue(s)', aiChangeMusicSet: 'music “{name}”', aiShotCards: 'Shot cards (click to preview in the monitor)',
     deleteNamedConfirm: 'Remove “{name}” from the timeline? The original file stays in the media pool.',
     removeMedia: 'Delete media', removeNamedMedia: 'Delete media: {name}', removeMediaConfirm: 'Delete {name}? The file is removed from the media pool and cannot be recovered.', mediaRemoved: 'Deleted {name}.', mediaInUse: '{name} is on the timeline. Remove it from the timeline first.',
-    aiMaskPrefix: 'Mask: {value}', aiMotionPrefix: 'Motion: {value}', aiPresetSwitching: 'Switching the opening preset…', aiPresetSwitched: 'Opening preset switched: {name}', timelineExtras: 'V2+ overlays {overlays} · SFX {sfx} · music {music}', noMusic: 'none'
+    aiMaskPrefix: 'Mask: {value}', aiMotionPrefix: 'Motion: {value}', aiPresetSwitching: 'Switching the opening preset…', aiPresetSwitched: 'Opening preset switched: {name}', timelineExtras: 'V2+ overlays {overlays} · SFX {sfx} · music {music}', noMusic: 'none',
+    aiLocalNotice: 'Local mode picks shots by scene changes and duration; nothing is uploaded and no speech captions are generated.', aiCloudNotice: 'Cloud analysis sends sampled frames, audio and your brief to the AI service and may incur API charges.', aiLanguageMismatch: 'This plan was generated in the other interface language. Generate a new plan to get the report in the current language.'
   }
 };
 
@@ -685,7 +687,7 @@ function renderAINotice() {
     if ($('#aiMode').value === 'cloud') $('#aiMode').value = 'local';
   }
   const cloud = $('#aiMode').value === 'cloud';
-  $('#aiNotice').textContent = cloud ? capabilities.cloud_notice : capabilities.local_notice;
+  $('#aiNotice').textContent = t(cloud ? 'aiCloudNotice' : 'aiLocalNotice');
   $('#aiConsentRow').classList.toggle('hidden', !cloud);
   const hint = $('#aiCloudHint');
   hint.classList.toggle('hidden', capabilities.cloud_available);
@@ -726,9 +728,11 @@ function renderAIResult(plan) {
     ? `${t('aiOpeningWritten', {count: creative.shot_count || 0, overlays: creative.overlay_count || 0, sounds: creative.sound_count || 0})} ${t('aiGlobalLine', {accents: direction.accent_count || 0, music: direction.music_name || t('noMusic')})}`
     : '';
 
-  $('#aiReportText').textContent = result.report?.report_text || '';
+  const planLang = plan.language || result.report?.language || 'zh';
+  $('#aiReportText').textContent = (planLang !== state.lang ? `${t('aiLanguageMismatch')}\n\n` : '') + (result.report?.report_text || '');
   const changes = result.changes || {};
-  $('#aiApplyNote').textContent = `${t('aiNoteFull')} ${t('aiChangeReplace', {count: changes.replace_video_clips ?? 0})}，${t('aiChangeAdd', {overlays: changes.add_overlays ?? 0, sfx: changes.add_sound_effects ?? 0})}${changes.preserve_background_music ? `，${t('aiChangeMusic')}` : changes.music ? `，${t('aiChangeMusicSet', {name: changes.music})}` : ''}。`;
+  const sep = state.lang === 'en' ? ', ' : '，', stop = state.lang === 'en' ? '.' : '。';
+  $('#aiApplyNote').textContent = `${t('aiNoteFull')} ${t('aiChangeReplace', {count: changes.replace_video_clips ?? 0})}${sep}${t('aiChangeAdd', {overlays: changes.add_overlays ?? 0, sfx: changes.add_sound_effects ?? 0})}${changes.preserve_background_music ? `${sep}${t('aiChangeMusic').toLowerCase()}` : changes.music ? `${sep}${t('aiChangeMusicSet', {name: changes.music})}` : ''}${stop}`;
   $('#aiApply').disabled = !validation.ok;
 
   $('#aiShots').innerHTML = (result.shots || []).map((shot, index) => {
@@ -851,6 +855,7 @@ $('#aiSetup').addEventListener('submit', async (event) => {
     cloud_consent: mode === 'cloud' && $('#aiConsent').checked,
     opening: $('#aiOpening').value,
     style: $('#aiStyle').value,
+    language: state.lang,
   };
   if (!body.media_ids.length) return banner(t('aiSelectSources'), 'error');
   $('#aiStart').disabled = true;

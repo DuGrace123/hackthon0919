@@ -253,6 +253,38 @@ class AIWorkflowTests(unittest.TestCase):
         self.assertEqual(result['result']['shots'][0]['role'], 'hook')
         self.assertIn('capture_stamp', result['result']['shots'][0])
 
+    def test_english_language_localizes_the_whole_plan_output(self):
+        self.backend.project.bgm = ''
+        result = self.ready(style='旅行叙事 · 目标—障碍—发现—回收', language='en')
+        self.assertEqual(result['language'], 'en')
+        self.assertEqual(result['message'], 'Plan ready, waiting for confirmation')
+        payload = result['result']
+        report = payload['report']
+        self.assertEqual(report['language'], 'en')
+        self.assertTrue(any(line.startswith('Cold open') for line in report['structure']))
+        self.assertTrue(any(line.startswith('Local analysis') for line in report['techniques']))
+        self.assertIn('Directing style: Travel story', '\n'.join(report['techniques']))
+        self.assertIn('Advanced opening', report['report_text'])
+        self.assertIn('Shot plan:', report['report_text'])
+        self.assertEqual(payload['creative']['name'], 'Cinematic Window · Premium vlog opening')
+        self.assertEqual(payload['opening_presets'][0]['name'], 'AI recommendation')
+        self.assertEqual(payload['global_direction']['music_name'], 'Travel Breeze')
+        self.assertEqual(payload['changes']['music'], 'Travel Breeze')
+        self.assertTrue(payload['summary'].endswith(' s'))
+        # Nothing the pipeline wrote itself may stay in Chinese; the fixture analyzer's own reason text is exempt.
+        leftovers = {ch for ch in report['report_text'].replace('本地镜头', '') if '\u4e00' <= ch <= '\u9fff'}
+        self.assertEqual(leftovers, set())
+        switched = self.workflow.set_opening('project-1', result['id'], 'owner-1', preset='carousel_flash')
+        self.assertTrue(switched['message'].startswith('Opening preset switched'))
+        self.assertEqual(switched['result']['shots'][0]['caption'], 'Quick preview')
+        with self.assertRaises(WorkflowError):
+            self.create(language=12)
+
+    def test_default_language_keeps_chinese_output(self):
+        result = self.ready()
+        self.assertEqual(result['language'], 'zh')
+        self.assertIn('故事线', result['result']['report']['report_text'])
+
     def test_chronological_opening_and_duplicate_caption_cleanup(self):
         def talky(ffmpeg, source, checkpoint):
             return [dict(start=0., end=3., score=70, caption='同一句话', reason='第一段', role='setup'),
