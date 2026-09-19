@@ -15,7 +15,10 @@ body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); 
 .security-note > span { color: #66b1ff; }
 .security-note p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .auth-panel { position: relative; display: grid; place-items: center; padding: 40px; background: radial-gradient(circle at 80% 10%, #17314c, transparent 32%), #0a111b; }
-.language-toggle { position: absolute; top: 28px; right: 32px; min-width: 52px; border: 1px solid #3b6087; border-radius: 8px; padding: 8px 12px; background: #10233a; color: #8dc8ff; cursor: pointer; font-weight: 800; }
+.language-switch { position: absolute; top: 28px; right: 32px; display: inline-flex; overflow: hidden; border: 1px solid #3b6087; border-radius: 8px; background: #10233a; }
+.language-switch button { border: 0; padding: 8px 13px; background: transparent; color: #8dc8ff; cursor: pointer; font-weight: 800; }
+.language-switch button.active { background: #2a5a8f; color: white; }
+.language-switch button:hover:not(.active) { background: #173455; }
 .auth-card { width: min(440px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 16px; background: #101a28ee; box-shadow: 0 24px 70px #0008; }
 .auth-card h2 { margin: 0; font-size: 30px; }
 .form-description { margin: 8px 0 25px; color: var(--muted); }

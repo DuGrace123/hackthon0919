@@ -80,6 +80,19 @@ def config_from_environment() -> APIConfig:
     )
 
 
+def validate_cloud_config(config: APIConfig | None) -> APIConfig:
+    """Copy and check a server-side cloud configuration; web requests need HTTPS and a bounded timeout."""
+    config = copy.deepcopy(config or APIConfig())
+    if config.api_key:
+        config.endpoint('responses')
+        if not config.base_url.strip().startswith('https://'):
+            raise ValueError('Web cloud requests require a server-configured HTTPS endpoint')
+        if (isinstance(config.timeout, bool) or not isinstance(config.timeout, (int, float))
+                or not 1 <= config.timeout <= 180):
+            raise ValueError('Cloud timeout must be between 1 and 180 seconds')
+    return config
+
+
 def _identifier(value: str) -> None:
     if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', value):
         raise WorkflowError('invalid_id', '工程或素材 ID 无效。', 422)
@@ -160,13 +173,7 @@ class AIWorkflow:
         if min(max_workers, max_records, ttl_seconds) < 1 or max_pending < 0:
             raise ValueError('Invalid workflow limits')
         self.backend, self.ffmpeg = backend, ffmpeg
-        self.config = copy.deepcopy(cloud_config or APIConfig())
-        if self.config.api_key:
-            self.config.endpoint('responses')
-            if not self.config.base_url.startswith('https://'):
-                raise ValueError('Web cloud requests require a server-configured HTTPS endpoint')
-            if not 1 <= self.config.timeout <= 180:
-                raise ValueError('Cloud timeout must be between 1 and 180 seconds')
+        self.config = validate_cloud_config(cloud_config)
         self.local_analyzer = local_analyzer
         self.caption_limit = caption_limit
         self.ttl, self.max_records = ttl_seconds, max_records
@@ -175,6 +182,12 @@ class AIWorkflow:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='ai-plan')
         self._records: dict[str, _Record] = {}
         self._closed = False
+
+    def configure_cloud(self, config: APIConfig | None) -> None:
+        """Swap the server-side cloud configuration at runtime; jobs already running keep the one they started with."""
+        validated = validate_cloud_config(config)
+        with self._lock:
+            self.config = validated
 
     def capabilities(self) -> dict:
         return {'local_available': bool(self.ffmpeg), 'cloud_available': bool(self.config.api_key and self.ffmpeg),
@@ -247,6 +260,15 @@ class AIWorkflow:
             raise WorkflowError('not_found', '找不到该 AI 方案，可能已过期。', 404)
         self.backend.get_project(project_id, owner_id)  # Permissions may have been revoked.
         return record
+
+    def list(self, project_id: str, owner_id: str) -> list[dict]:
+        """Unexpired plans of one owner for one project, newest first (lets a page restore state)."""
+        _identifier(project_id)
+        with self._lock:
+            self._prune()
+            self.backend.get_project(project_id, owner_id)
+            return [copy.deepcopy(record.public) for record in reversed(list(self._records.values()))
+                    if record.owner_id == owner_id and record.public['project_id'] == project_id]
 
     def get(self, project_id: str, plan_id: str, owner_id: str) -> dict:
         with self._lock:

@@ -1,174 +1,124 @@
-**Version:** 4.13.0 · **Platform:** Windows 10 / 11 · **Source runtime:** Python 3.11+
+# 灵剪 LingJian AI Video Editor
 
-[Download the Windows installer](https://github.com/MikeKang202210061/lingjian-ai-video-editor/releases/download/v4.13.0/LingJian-AI-Video-Editor-4.13.0-Windows-Setup.exe) · [Download details and checksum](docs/download_guide.md) · [Release notes](docs/release_notes.md)
+**Version:** 4.13.0 · **Platform:** any OS with Python 3.11+ and FFmpeg (browser-based editor) · **Source runtime:** Python 3.11+
+
+LingJian is a browser-based nonlinear video editor with auditable AI-assisted editing. The web editor is the only supported product surface. The earlier PySide6 desktop application remains in the repository for reference but is no longer maintained (see [Desktop application (legacy)](#desktop-application-legacy)).
+
+## Quick start
+
+```sh
+python -m pip install -r requirements-web.txt
+python web_app.py
+```
+
+Open `http://127.0.0.1:5000`. Set `PORT` to use another port; macOS reserves 5000 for AirPlay Receiver, so `PORT=5002 python web_app.py` is a common choice there. On the first launch the login page asks you to create the initial administrator account. There is no default username or password.
+
+FFmpeg lookup order: `LINGJIAN_FFMPEG`, `ffmpeg.exe` beside `web_app.py` (Windows only), `ffmpeg` on `PATH`, then the `imageio-ffmpeg` package that `requirements-web.txt` installs. `GET /api/health` reports which executable is in use and whether export is ready.
+
+Uploaded media, the working project, the media catalog, exports, and the account database are kept under `web_workspace/` (override with `LINGJIAN_WEB_WORKSPACE`). The server binds to localhost by default.
 
 ## What you can do
 
 | Area | Capabilities |
 | --- | --- |
-| Timeline editing | Source and program monitors, in/out points, insert and overwrite, trimming, splitting, ripple deletion, duplication, undo and redo. |
-| Assisted assembly | Local scene and quality analysis, target-duration assembly, optional cloud content analysis, and capture-order and continuity checks. |
-| Creative treatment | Editable captions, animated titles, transitions, masks, camera-motion effects, and independent overlay tracks. |
-| Audio | Original audio, background music, dialogue ducking, six bundled music loops, and sixteen sound effects. |
-| Person effects | Local U²-Net person segmentation with temporal smoothing and background blur, dimming, or color treatment. |
-| Export | Portrait, landscape, and square MP4 presets using H.264/AAC, with preflight checks and output validation. |
-
-Cloud AI is optional. Manual editing, local analysis, and rendering work without an API key. The desktop interface uses Chinese labels; the workflow below includes the labels you will see in the application.
-
-## Web editing interface (Member 3)
-
-The repository also includes a browser-based editing workspace backed by real local APIs. Its DaVinci-inspired layout places the media library on the left, the program monitor in the center, the clip inspector on the right, and video/audio tracks across the bottom. It covers timeline ordering, trim points, subtitles, transitions, project saving, and asynchronous MP4 export. Use the **EN / 中文** button to switch the entire interface between Chinese and English. Drag clips to reorder them, drag the horizontal divider to resize the timeline, and use the timeline zoom control for finer or broader timing views; language and layout settings are remembered in the browser.
-
-```powershell
-pip install -r requirements.txt
-python web_app.py
-```
-
-Open `http://127.0.0.1:5000`. Uploaded media, the saved project, and exports are kept under `web_workspace/`. The server binds to localhost by default. The page includes empty, loading, success, and error states; uploaded originals remain in the media library when a timeline clip is removed.
-
-On the first launch, the login page asks you to create the initial administrator account. There is no default username or password. Account records are stored in `web_workspace/accounts.sqlite3`; passwords are stored as one-way hashes, and authenticated write requests use a session-bound CSRF token. Administrators can open **账户管理 / Accounts** from the editor header to create editors or other administrators, change roles, enable or disable access, reset passwords, and delete accounts. The application prevents deletion or deactivation of the current user and the last active administrator.
-
-## Get started
-
-### Use the Windows installer
-
-1. Download the **4.13.0 Windows installer** using the link above.
-2. Check the file against the SHA-256 value in the [download guide](docs/download_guide.md).
-3. Run the installer and launch LingJian.
-
-The local distribution also includes the installer under `installer/`. A packaged installation does not require a separate Python environment.
-
-### Run from source
-
-Open PowerShell in this project's root directory, then run:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe video_editor_app.py
-```
-
-The application uses PySide6 for its interface, NumPy and Pillow for image processing, and ONNX Runtime for person segmentation. Dependency versions are defined in [requirements.txt](requirements.txt) and [pyproject.toml](pyproject.toml).
-
-### Run the backend API
-
-The HTTP API stores projects as `.ljproject` files under `workspace/` and mounts AI planning, explicit application, and undo at the same `/api/v1` prefix. Interactive documentation is available at `http://127.0.0.1:8000/docs`:
-
-```sh
-python -m pip install -r requirements-backend.txt
-python -m backend
-```
-
-Run these commands with Python 3.11+ in your activated environment. The backend alone does not require the desktop Qt/ONNX dependencies. This is a local single-user development service; browser UI and media upload/playback still need their team integrations. AI sources currently come from project references inside `workspace/media/`. Set `LINGJIAN_FFMPEG`, install FFmpeg on PATH, or install the optional `imageio-ffmpeg` package to enable analysis.
-
-See the [backend API guide](docs/backend_api.md) for project data and conflict handling, and the [integrated AI workflow guide](docs/ai_workflow_integration.md) for source IDs, preview/apply/undo, cloud configuration, and frontend integration.
-
-For desktop media processing, LingJian first looks for `ffmpeg.exe` beside `video_editor_app.py`, then looks for `ffmpeg` on `PATH`. The local distribution includes the Windows executable. Keep the `assets/` and `models/` folders at the project root so the application can find its resources.
+| Media pool | Upload video and audio through the browser. The server probes every file with FFmpeg; originals stay in the media library when timeline clips are removed. |
+| Timeline editing | DaVinci-inspired layout with the media pool on the left, the program monitor in the center, the clip inspector on the right, and video/audio tracks across the bottom. Trim points, captions, transitions, source-audio volume, drag-to-reorder, timeline zoom, and a resizable timeline. |
+| AI 导演 / AI Director | Pick source clips, a target duration, and an editing brief. Local mode analyzes scenes with FFmpeg and never uploads footage; cloud mode (when configured on the server) adds content analysis and narrative planning. Preview the shot list, apply it to the timeline, undo in one click. |
+| Accounts and AI service | Administrators create editors or other administrators, change roles, enable or disable access, reset passwords, and delete accounts, and connect the cloud AI service (URL, API key, models) with a connection test. Passwords are stored as one-way hashes; write requests use a session-bound CSRF token. |
+| Export | Portrait, landscape, and square MP4 presets using H.264/AAC, rendered asynchronously with preflight checks and output validation. |
+| Language | The **EN / 中文** button switches the whole interface; language and layout settings are remembered in the browser. |
 
 ## Make your first video
 
-1. **Import footage.** Click **＋ 导入** and select video or audio files. Add the clips you want to work with using **添加到时间线**. Difficult video formats may need a proxy before previewing smoothly.
-2. **Choose how to assemble it.** Edit directly on the timeline, or open **AI 导演** and set the target duration, story style, and editing instructions. The three assisted options are described below.
-3. **Review the proposal.** Inspect the proposed clip sequence, captions, effects, and audio treatment. Apply the plan to the timeline when it is ready; the resulting clips remain editable and the application supports undo.
-4. **Refine the timeline.** Adjust cuts, captions, transitions, overlays, and audio. Use **学习当前人工时间线** if you want later plans to take your editing preferences into account.
-5. **Save and export.** Save a `.ljproject` file to keep editing later. Under **音频与导出**, select an output preset, run **导出前质量检查**, and choose **导出 MP4**.
-
-Project files store editing decisions and media paths. Keep the original media available at those paths when reopening a project.
-
-| Option in AI 导演 | What it does | Requires a cloud key |
-| --- | --- | --- |
-| 快速节奏方案 | Builds a quick assembly from clips already on the timeline. | No |
-| 离线分析并预览完整方案 | Analyzes local scenes and technical quality, then proposes a sequence. | No |
-| 生成完整方案并预览高级开头 | Uses cloud content analysis and narrative planning, then presents a reviewable edit plan. | Yes |
+1. **Import footage.** Click **＋ 导入 / Import** and select video or audio files. The login page and every screen switch between 中文 and English with the language control in the top-right corner.
+2. **Ask the AI Director for a cut.** Click **AI 导演 / AI Director**, tick the source clips, set the target duration (5–180 seconds), describe what you want, and click **生成方案 / Generate Plan**. Local mode needs no API key.
+3. **Review the plan.** The panel lists every shot with its source, in/out points, caption, and reasoning, plus what applying it will change (which timeline clips are replaced, whether background music is kept). Click a shot to preview it in the program monitor.
+4. **Apply or discard.** **应用到时间线 / Apply to Timeline** replaces the video clips, saves the project to disk, and marks the new clips with an **AI** badge. **撤销应用 / Undo Apply** restores the previous timeline. Manual edits made after a plan was generated block applying it (HTTP 409), so a plan can never overwrite work it has not seen.
+5. **Refine, save, export.** Trim, caption, and reorder clips as usual, click **保存工程 / Save Project**, then **导出 MP4 / Export MP4**.
 
 ## Optional cloud analysis
 
-Open **AI 接口**, enter the service URL, API key, visual model, and transcription model, then select **加密保存接口设置**. Start cloud analysis explicitly from **AI 导演**.
+Administrators connect the cloud service under **账户管理 / Accounts → AI 接口 / AI Service**: service URL (HTTPS only), API key, vision model, transcription model, and request timeout, with a **测试连接 / Test Connection** button that calls the provider's model list. Settings are stored on the server in `web_workspace/ai_settings.json` (DPAPI-encrypted on Windows, owner-readable elsewhere), are never returned to browsers, and cannot be read or changed by editor accounts. Saved settings take precedence over the environment variables below, which remain available for headless deployments. Plan requests from the browser never carry keys, endpoints, or model names.
 
-The configured service must support the request formats used by this application: `/v1/responses` with image input and structured JSON output, and `/v1/audio/transcriptions` for audio transcription. Model names must match models available through your provider. See [cloud API setup](docs/cloud_ai_setup.md) for configuration details.
+| Environment variable | Default |
+| --- | --- |
+| `FIGSTUDIO_AI_API_KEY` | empty; without web settings cloud mode is unavailable and local mode still works |
+| `FIGSTUDIO_AI_BASE_URL` | `https://api.openai.com` (HTTPS required) |
+| `FIGSTUDIO_AI_MODEL` | `gpt-5-mini` |
+| `FIGSTUDIO_AI_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` |
 
-During a cloud analysis run, the application sends generated contact sheets and extracted audio, along with your editing instructions and analysis context, to the configured service. Rendering and project editing remain local. On Windows, API keys are protected with the current user's DPAPI credentials and stored in application settings; they are not saved in project files.
+The configured service must support `/v1/responses` with image input and structured JSON output, and `/v1/audio/transcriptions`. During a cloud run the server sends contact sheets, extracted audio, the editing brief, and analysis context; the AI Director panel requires an explicit consent tick for every cloud plan. See [cloud API setup](docs/cloud_ai_setup.md).
 
-## Optional person-segmentation model
+## Backend API (optional)
 
-Person effects use the following model file:
+`python -m backend` starts a separate FastAPI service at `http://127.0.0.1:8000/docs` that stores multiple `.ljproject` files under `workspace/` and exposes the same AI planning, apply, and undo operations for integrations. The web editor does not depend on it. Install its dependencies with `requirements-backend.txt`; see the [backend API guide](docs/backend_api.md) and the [AI workflow guide](docs/ai_workflow_integration.md).
 
-```text
-models/u2net_human_seg.onnx
-```
+## Desktop application (legacy)
 
-The local distribution includes this file. If you obtain the source without it, supply the model separately and verify it against `MODEL_SHA256` in [person_segmentation.py](person_segmentation.py). Other editing features remain available without the model.
-
-Model files, installers, and generated videos are excluded by `.gitignore`, so a source checkout may not include them. Component notices and model licenses are listed in [third-party notices](docs/third_party_notices.md).
+`video_editor_app.py` is the earlier Windows desktop interface (PySide6, ONNX person segmentation, bundled `ffmpeg.exe`, optional `models/u2net_human_seg.onnx`). It is no longer the development target. Its dependencies stay in `requirements.txt` and the Windows installer is described in the [download guide](docs/download_guide.md). The web editor shares the same `.ljproject` format and editing engine, so existing projects remain readable.
 
 ## Project structure
 
 ```text
 .
-├── video_editor_app.py        # Desktop entry point and workflow coordination
-├── multitrack_timeline.py     # Media list and interactive timeline widgets
-├── video_editing_engine.py    # Project data, media analysis, editing, and rendering
-├── ai_story_planner.py        # Cloud requests, narrative planning, and continuity
-├── ai_workflow.py             # Background AI proposals, confirmation and undo
-├── ai_workflow_api.py         # AI request/response routes
+├── web_app.py                 # Web editor: authenticated Flask app, editing API, AI Director routes
+├── web_auth.py                # SQLite account store and validation
+├── web/                       # Login, account-management, and editing interfaces
+├── ai_workflow.py             # Reviewable AI plans: background analysis, apply and undo transactions
+├── ai_story_planner.py        # Local scene analysis, cloud requests, narrative planning, continuity
 ├── edit_plan.py               # Edit-plan construction, validation, and application
 ├── creative_treatment.py      # Whole-video caption, motion, sound, and music choices
 ├── editing_preferences.py     # Preferences learned from user-edited timelines
-├── person_segmentation.py     # Local person segmentation and tracking
-├── web_app.py                 # Authenticated local web editor and API
-├── web_auth.py                # SQLite account store and validation
-├── web/                       # Login, account-management, and editing interfaces
+├── video_editing_engine.py    # Project data, media probing, editing, and rendering
 ├── builtin_music.py           # Bundled music metadata and generation
 ├── builtin_sound_effects.py   # Bundled sound-effect metadata and generation
-├── backend/
-│   ├── project_store.py       # Project validation, atomic saves, revisions, id boundary
-│   ├── ai_adapter.py          # Persist AI changes and resolve workspace media
-│   └── api.py                 # Unified project and AI FastAPI application
-├── assets/
-│   ├── fonts/                 # Bundled fonts and their licenses
-│   ├── music/                 # Generated music loops
-│   └── sfx/                   # Generated sound effects
-├── docs/                      # Setup, release notes, design, and component notices
-├── examples/
-│   ├── projects/              # Local sample editing projects
-│   └── renders/               # Existing sample render outputs
-├── installer/                 # Local Windows installer
-├── licenses/                  # Third-party license texts
-├── models/                    # Optional segmentation model
-├── tests/                     # Portable checks and FFmpeg rendering tests
-├── ffmpeg.exe                 # Bundled Windows media-processing executable
-├── pyproject.toml             # Project metadata and dependency constraints
-├── requirements.txt           # Dependencies for running from source
-└── requirements-backend.txt   # Extra dependencies for the backend API
+├── backend/                   # Optional FastAPI service: multi-project store + AI routes
+├── ai_workflow_api.py         # FastAPI router used by backend/
+├── video_editor_app.py        # Legacy desktop entry point
+├── multitrack_timeline.py     # Legacy desktop timeline widgets
+├── person_segmentation.py     # Legacy desktop person segmentation
+├── assets/                    # Fonts, generated music loops, sound effects
+├── docs/                      # Setup, design, release notes, component notices
+├── examples/                  # Local sample projects and renders
+├── tests/                     # Portable checks, web editor tests, FFmpeg rendering tests
+├── requirements-web.txt       # Web editor dependencies
+├── requirements-backend.txt   # Optional backend API dependencies
+└── requirements.txt           # Legacy desktop dependencies
 ```
 
-Start with `video_editor_app.py` to follow the application workflow. Assisted editing runs through `ai_story_planner.py`, `edit_plan.py`, and `creative_treatment.py`; `video_editing_engine.py` owns the project operations and rendering commands. Files in `examples/` are local sample artifacts. Sample projects may reference source media that is not included.
+Start with `web_app.py` to follow the application workflow. AI planning runs through `ai_workflow.py`, `ai_story_planner.py`, and `edit_plan.py`; `video_editing_engine.py` owns the project operations and rendering commands. Files in `examples/` are local sample artifacts and may reference source media that is not included.
 
 ## Tests
 
 Run the portable regression suite from the project root:
 
-```powershell
+```sh
 python tests/run_regression_tests.py
 ```
 
-It covers edit-plan validation, automatic ordering, continuity, editing preferences, long-form sequencing, capture chronology, the project store (validation, atomic saves, revisions, backups), and the AI request flow. These checks use the Python standard library and a local mock API; they do not require a GUI, a cloud key, or FFmpeg. The mock API needs permission to listen on the loopback interface. The HTTP checks in `tests/test_backend_api.py` run when `fastapi` is installed and are skipped otherwise.
+It covers edit-plan validation, automatic ordering, continuity, editing preferences, long-form sequencing, capture chronology, the project store (validation, atomic saves, revisions, backups), and the AI request flow. These checks use the Python standard library and a local mock API; they do not require a browser, a cloud key, or FFmpeg. The mock API needs permission to listen on the loopback interface.
 
-On Windows with FFmpeg available, run the additional rendering checks from the project root:
+The web editor and its AI Director are covered by `tests/test_web_app.py` (login, accounts, upload, timeline editing, export, AI plan preview/apply/undo, revision conflicts, privacy). The HTTP checks in `tests/test_backend_api.py` run when `fastapi` is installed and are skipped otherwise:
 
-```powershell
+```sh
+python -m pytest tests/test_web_app.py tests/test_ai_workflow.py tests/test_backend_api.py
+```
+
+With FFmpeg available, run the additional rendering checks from the project root:
+
+```sh
 python -m tests.test_video_editing_engine
 python -m tests.test_transitions_and_masks
 ```
 
-These generate test media and render actual output files. The portable suite does not replace rendering checks or a manual desktop smoke test.
+These generate test media and render actual output files. The portable suite does not replace rendering checks or a manual browser smoke test.
 
 ## Documentation
 
-- [Download and checksum](docs/download_guide.md)
+- [Integrated AI workflow and browser contract](docs/ai_workflow_integration.md)
 - [Cloud API configuration](docs/cloud_ai_setup.md)
 - [Backend API and project persistence](docs/backend_api.md)
-- [Integrated AI workflow and frontend contract](docs/ai_workflow_integration.md)
 - [Release notes](docs/release_notes.md)
 - [Creative-treatment design](docs/creative_treatment_design.md)
+- [Download and checksum (legacy desktop installer)](docs/download_guide.md)
 - [Third-party components and licenses](docs/third_party_notices.md)

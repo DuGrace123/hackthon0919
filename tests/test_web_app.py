@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from ai_story_planner import AIRequestError, unprotect_secret
 from web_app import create_app
 
 
@@ -193,3 +196,416 @@ class AccountManagementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def fake_probe_by_type(ffmpeg, path):
+    meta = fake_probe(ffmpeg, path)
+    if Path(path).suffix.lower() in {".mp3", ".wav"}:
+        meta.update(width=0, height=0, codec="mp3")
+    return meta
+
+
+def fake_analyzer(_ffmpeg, source, checkpoint):
+    checkpoint()
+    return [
+        dict(start=0.0, end=4.0, score=80, caption="", reason="本地镜头", role="setup"),
+        dict(start=7.0, end=11.0, score=90, caption="", reason="本地镜头", role="outro"),
+    ]
+
+
+class AIDirectorTests(unittest.TestCase):
+    """The AI planning workflow mounted on the web editor: preview, apply, undo, conflicts, privacy."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.env = patch.dict(os.environ, {"FIGSTUDIO_AI_API_KEY": ""})
+        self.env.start()
+        self.app = create_app(self.temp.name, probe_fn=fake_probe_by_type, export_runner=fake_export, ai_analyzer=fake_analyzer)
+        self.app.config.update(TESTING=True)
+        self.client = self.app.test_client()
+        status = self.client.get("/api/auth/status").get_json()
+        created = self.client.post(
+            "/api/auth/setup",
+            json={"username": "test-admin", "password": "testing-pass-123", "confirm_password": "testing-pass-123"},
+            headers={"X-CSRF-Token": status["csrf_token"]},
+        )
+        self.assertEqual(created.status_code, 201, created.get_json())
+        self.csrf = created.get_json()["csrf_token"]
+        self.headers = {"X-CSRF-Token": self.csrf}
+
+    def tearDown(self):
+        self.app.ai_workflow.close()
+        self.env.stop()
+        self.temp.cleanup()
+
+    def upload(self, name="camera-one.mp4"):
+        response = self.client.post(
+            "/api/media/upload",
+            data={"files": (io.BytesIO(b"fake video"), name)},
+            content_type="multipart/form-data",
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 201, response.get_json())
+        return response.get_json()["media"][0]
+
+    def add_clip(self, media_id):
+        response = self.client.post("/api/timeline/clips", json={"media_id": media_id}, headers=self.headers)
+        self.assertEqual(response.status_code, 201, response.get_json())
+        return response.get_json()["project"]["clips"][-1]
+
+    def project(self):
+        return self.client.get("/api/project").get_json()["project"]
+
+    def project_file(self):
+        return json.loads((Path(self.temp.name) / "project.ljproject").read_text(encoding="utf-8"))
+
+    def create_plan(self, media, **overrides):
+        body = {"media_ids": [media["id"]], "revision": self.project()["revision"], "target_duration": 8}
+        body.update(overrides)
+        return self.client.post("/api/ai/plans", json=body, headers=self.headers)
+
+    def wait(self, plan_id):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            plan = self.client.get(f"/api/ai/plans/{plan_id}").get_json()
+            if plan["status"] not in {"queued", "running"}:
+                return plan
+            time.sleep(0.02)
+        raise AssertionError("AI plan did not finish")
+
+    def test_capabilities_and_sources_only_list_video_media(self):
+        video = self.upload()
+        self.upload("voice.mp3")
+        capabilities = self.client.get("/api/ai/capabilities").get_json()
+        self.assertTrue(capabilities["local_available"])
+        self.assertFalse(capabilities["cloud_available"])
+        sources = self.client.get("/api/ai/sources").get_json()
+        self.assertEqual([item["id"] for item in sources["items"]], [video["id"]])
+        self.assertEqual(sources["revision"], self.project()["revision"])
+
+    def test_local_plan_preview_apply_persist_and_undo(self):
+        media = self.upload()
+        manual = self.add_clip(media["id"])
+        before = self.project()
+
+        started = self.create_plan(media, prompt="保留开头和结尾")
+        self.assertEqual(started.status_code, 202, started.get_json())
+        plan = self.wait(started.get_json()["id"])
+        self.assertEqual(plan["status"], "ready", plan)
+        shots = plan["result"]["shots"]
+        self.assertGreaterEqual(len(shots), 2)
+        self.assertEqual({shot["media_id"] for shot in shots}, {media["id"]})
+        self.assertNotIn("source_path", json.dumps(plan))
+        self.assertNotIn(self.temp.name, json.dumps(plan))
+        self.assertEqual(plan["result"]["changes"]["replace_video_clips"], 1)
+        self.assertEqual(self.project(), before, "previewing a plan must not touch the project")
+
+        applied = self.client.post(
+            f"/api/ai/plans/{plan['id']}/apply", json={"revision": before["revision"], "confirm": True}, headers=self.headers
+        )
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        body = applied.get_json()
+        self.assertEqual(body["plan"]["status"], "applied")
+        clips = body["project"]["clips"]
+        self.assertEqual(len(clips), len(shots))
+        self.assertTrue(all(clip["ai_selected"] for clip in clips))
+        self.assertTrue(all(clip["media_url"] for clip in clips), "AI clips must stay previewable in the browser")
+        self.assertGreater(body["project"]["revision"], before["revision"])
+        on_disk = self.project_file()
+        self.assertEqual(len(on_disk["clips"]), len(shots))
+        self.assertEqual(on_disk["edit_log"][-1]["type"], "apply_ai_plan")
+
+        undone = self.client.post(
+            f"/api/ai/plans/{plan['id']}/undo", json={"revision": body["project"]["revision"]}, headers=self.headers
+        )
+        self.assertEqual(undone.status_code, 200, undone.get_json())
+        self.assertEqual(undone.get_json()["plan"]["status"], "undone")
+        self.assertEqual([clip["id"] for clip in undone.get_json()["project"]["clips"]], [manual["id"]])
+        self.assertEqual([clip["id"] for clip in self.project_file()["clips"]], [manual["id"]])
+
+    def test_manual_edit_after_plan_generation_blocks_apply(self):
+        media = self.upload()
+        clip = self.add_clip(media["id"])
+        plan = self.wait(self.create_plan(media).get_json()["id"])
+        self.assertEqual(plan["status"], "ready", plan)
+        edited = self.client.patch(f"/api/timeline/clips/{clip['id']}", json={"caption": "手工字幕"}, headers=self.headers)
+        self.assertEqual(edited.status_code, 200, edited.get_json())
+        applied = self.client.post(
+            f"/api/ai/plans/{plan['id']}/apply", json={"revision": self.project()["revision"], "confirm": True}, headers=self.headers
+        )
+        self.assertEqual(applied.status_code, 409, applied.get_json())
+        self.assertEqual(applied.get_json()["code"], "revision_conflict")
+        self.assertEqual(self.project()["clips"][0]["caption"], "手工字幕")
+
+    def test_unchanged_project_patch_keeps_plan_applicable(self):
+        media = self.upload()
+        plan = self.wait(self.create_plan(media).get_json()["id"])
+        current = self.project()
+        touched = self.client.patch("/api/project", json={"title": current["title"], "ratio": current["ratio"]}, headers=self.headers)
+        self.assertEqual(touched.get_json()["project"]["revision"], current["revision"])
+        applied = self.client.post(
+            f"/api/ai/plans/{plan['id']}/apply", json={"revision": current["revision"], "confirm": True}, headers=self.headers
+        )
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+
+    def test_apply_needs_confirmation_and_create_needs_current_revision(self):
+        media = self.upload()
+        plan = self.wait(self.create_plan(media).get_json()["id"])
+        denied = self.client.post(
+            f"/api/ai/plans/{plan['id']}/apply", json={"revision": self.project()["revision"], "confirm": False}, headers=self.headers
+        )
+        self.assertEqual(denied.status_code, 422)
+        self.assertEqual(denied.get_json()["code"], "confirmation_required")
+        stale = self.create_plan(media, revision=self.project()["revision"] + 5)
+        self.assertEqual(stale.status_code, 409)
+        missing = self.create_plan(media, revision="3")
+        self.assertEqual(missing.status_code, 422)
+        self.assertEqual(missing.get_json()["code"], "invalid_revision")
+
+    def test_cancel_discards_plan_without_touching_project(self):
+        media = self.upload()
+        self.add_clip(media["id"])
+        before = self.project()
+        plan = self.wait(self.create_plan(media).get_json()["id"])
+        cancelled = self.client.post(f"/api/ai/plans/{plan['id']}/cancel", headers=self.headers)
+        self.assertEqual(cancelled.status_code, 200, cancelled.get_json())
+        self.assertEqual(cancelled.get_json()["status"], "cancelled")
+        self.assertEqual(self.project(), before)
+        applied = self.client.post(
+            f"/api/ai/plans/{plan['id']}/apply", json={"revision": before["revision"], "confirm": True}, headers=self.headers
+        )
+        self.assertEqual(applied.status_code, 409)
+        self.assertEqual(applied.get_json()["code"], "invalid_state")
+
+    def test_audio_only_media_is_rejected(self):
+        audio = self.upload("voice.mp3")
+        response = self.create_plan(audio)
+        self.assertEqual(response.status_code, 422, response.get_json())
+        self.assertEqual(response.get_json()["code"], "invalid_media")
+
+    def test_cloud_mode_needs_consent_and_server_configuration(self):
+        media = self.upload()
+        no_consent = self.create_plan(media, mode="cloud")
+        self.assertEqual(no_consent.status_code, 422)
+        self.assertEqual(no_consent.get_json()["code"], "consent_required")
+        unavailable = self.create_plan(media, mode="cloud", cloud_consent=True)
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(unavailable.get_json()["code"], "cloud_unavailable")
+
+    def test_ai_clip_transitions_survive_manual_edits(self):
+        media = self.upload()
+        plan = self.wait(self.create_plan(media).get_json()["id"])
+        applied = self.client.post(
+            f"/api/ai/plans/{plan['id']}/apply", json={"revision": self.project()["revision"], "confirm": True}, headers=self.headers
+        ).get_json()
+        clip = applied["project"]["clips"][-1]
+        edited = self.client.patch(
+            f"/api/timeline/clips/{clip['id']}",
+            json={"caption": "改一下字幕", "transition": "pip_zoom"}, headers=self.headers,
+        )
+        self.assertEqual(edited.status_code, 200, edited.get_json())
+
+    def test_plan_list_lets_a_reloaded_page_recover_the_latest_plan(self):
+        media = self.upload()
+        first = self.wait(self.create_plan(media).get_json()["id"])
+        self.client.post(f"/api/ai/plans/{first['id']}/cancel", headers=self.headers)
+        second = self.wait(self.create_plan(media).get_json()["id"])
+        listed = self.client.get("/api/ai/plans").get_json()["plans"]
+        self.assertEqual([plan["id"] for plan in listed], [second["id"], first["id"]])
+        self.assertEqual(listed[0]["status"], "ready")
+        self.assertEqual(listed[1]["status"], "cancelled")
+        applied = self.client.post(
+            f"/api/ai/plans/{second['id']}/apply", json={"revision": self.project()["revision"], "confirm": True}, headers=self.headers
+        )
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        self.assertEqual(self.client.get("/api/ai/plans").get_json()["plans"][0]["status"], "applied")
+
+    def test_plans_are_private_and_require_login(self):
+        media = self.upload()
+        plan_id = self.create_plan(media).get_json()["id"]
+        created = self.client.post(
+            "/api/admin/users", json={"username": "editor-one", "password": "editor-pass-123", "role": "editor"}, headers=self.headers
+        )
+        self.assertEqual(created.status_code, 201, created.get_json())
+        other = self.app.test_client()
+        status = other.get("/api/auth/status").get_json()
+        login = other.post(
+            "/api/auth/login", json={"username": "editor-one", "password": "editor-pass-123"},
+            headers={"X-CSRF-Token": status["csrf_token"]},
+        )
+        self.assertEqual(login.status_code, 200, login.get_json())
+        self.assertEqual(other.get(f"/api/ai/plans/{plan_id}").status_code, 404)
+        self.assertEqual(other.get("/api/ai/plans").get_json()["plans"], [])
+        anonymous = self.app.test_client()
+        self.assertEqual(anonymous.get("/api/ai/capabilities").status_code, 401)
+
+
+class AIServiceSettingsTests(unittest.TestCase):
+    """Administrators configure the cloud AI service in the web UI; keys never return to the browser."""
+
+    KEY = "sk-test-1234567890abcd"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.env = patch.dict(os.environ, {"FIGSTUDIO_AI_API_KEY": ""})
+        self.env.start()
+        self.tester_calls = []
+        self.tester_result = ["gpt-5-mini", "gpt-4o-mini-transcribe", "other-model"]
+        self.app = self.make_app()
+        self.client = self.app.test_client()
+        status = self.client.get("/api/auth/status").get_json()
+        created = self.client.post(
+            "/api/auth/setup",
+            json={"username": "test-admin", "password": "testing-pass-123", "confirm_password": "testing-pass-123"},
+            headers={"X-CSRF-Token": status["csrf_token"]},
+        )
+        self.assertEqual(created.status_code, 201, created.get_json())
+        self.headers = {"X-CSRF-Token": created.get_json()["csrf_token"]}
+
+    def tearDown(self):
+        self.env.stop()
+        self.temp.cleanup()
+
+    def fake_tester(self, config):
+        self.tester_calls.append(config)
+        if isinstance(self.tester_result, Exception):
+            raise self.tester_result
+        return self.tester_result
+
+    def make_app(self):
+        app = create_app(self.temp.name, probe_fn=fake_probe, export_runner=fake_export, ai_analyzer=fake_analyzer,
+                         cloud_tester=self.fake_tester)
+        app.config.update(TESTING=True)
+        self.addCleanup(app.ai_workflow.close)
+        return app
+
+    def settings(self):
+        return self.client.get("/api/admin/ai-config").get_json()
+
+    def save(self, **overrides):
+        body = {"base_url": "https://ai.example.test/v1", "api_key": self.KEY, "model": "gpt-5-mini",
+                "transcription_model": "gpt-4o-mini-transcribe", "timeout": 45}
+        body.update(overrides)
+        return self.client.put("/api/admin/ai-config", json=body, headers=self.headers)
+
+    def test_starts_unconfigured_with_local_mode_only(self):
+        current = self.settings()
+        self.assertFalse(current["api_key_set"])
+        self.assertEqual(current["source"], "none")
+        self.assertFalse(current["cloud_available"])
+        self.assertFalse(self.client.get("/api/ai/capabilities").get_json()["cloud_available"])
+
+    def test_saving_enables_cloud_mode_masks_key_and_protects_file(self):
+        saved = self.save()
+        self.assertEqual(saved.status_code, 200, saved.get_json())
+        body = saved.get_json()
+        self.assertTrue(body["api_key_set"])
+        self.assertEqual(body["api_key_hint"], "sk-…abcd")
+        self.assertNotIn(self.KEY, json.dumps(body))
+        self.assertEqual(body["source"], "settings")
+        self.assertTrue(body["cloud_available"])
+        self.assertEqual(body["updated_by"], "test-admin")
+        self.assertEqual(body["timeout"], 45)
+        self.assertTrue(self.client.get("/api/ai/capabilities").get_json()["cloud_available"])
+
+        settings_file = Path(self.temp.name) / "ai_settings.json"
+        raw = settings_file.read_text(encoding="utf-8")
+        self.assertNotIn(self.KEY, raw, "the key must not be stored in clear text")
+        self.assertEqual(unprotect_secret(json.loads(raw)["api_key"]), self.KEY)
+        if os.name != "nt":
+            self.assertEqual(settings_file.stat().st_mode & 0o777, 0o600)
+
+        edited = self.save(api_key="", model="gpt-5")
+        self.assertEqual(edited.status_code, 200, edited.get_json())
+        self.assertEqual(edited.get_json()["model"], "gpt-5")
+        self.assertEqual(edited.get_json()["api_key_hint"], "sk-…abcd", "a blank key keeps the saved one")
+
+    def test_settings_survive_a_server_restart(self):
+        self.assertEqual(self.save().status_code, 200)
+        restarted = self.make_app().test_client()
+        status = restarted.get("/api/auth/status").get_json()
+        login = restarted.post("/api/auth/login", json={"username": "test-admin", "password": "testing-pass-123"},
+                               headers={"X-CSRF-Token": status["csrf_token"]})
+        self.assertEqual(login.status_code, 200, login.get_json())
+        current = restarted.get("/api/admin/ai-config").get_json()
+        self.assertTrue(current["api_key_set"])
+        self.assertEqual(current["source"], "settings")
+        self.assertTrue(current["cloud_available"])
+        self.assertEqual(current["base_url"], "https://ai.example.test/v1")
+
+    def test_rejects_plain_http_missing_key_and_bad_timeout(self):
+        insecure = self.save(base_url="http://ai.example.test")
+        self.assertEqual(insecure.status_code, 400)
+        self.assertIn("https", insecure.get_json()["error"])
+        missing = self.save(api_key="")
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("API Key", missing.get_json()["error"])
+        slow = self.save(timeout=0)
+        self.assertEqual(slow.status_code, 400)
+        spaced = self.save(api_key="sk-with space")
+        self.assertEqual(spaced.status_code, 400)
+        self.assertFalse(self.settings()["api_key_set"])
+
+    def test_connection_test_uses_saved_key_and_reports_model_names(self):
+        self.assertEqual(self.save().status_code, 200)
+        body = {"base_url": "https://ai.example.test/v1", "model": "gpt-5-mini", "transcription_model": "gpt-4o-mini-transcribe", "timeout": 45}
+        result = self.client.post("/api/admin/ai-config/test", json=body, headers=self.headers).get_json()
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["model_found"])
+        self.assertTrue(result["transcription_model_found"])
+        self.assertEqual(result["model_count"], 3)
+        self.assertEqual(self.tester_calls[-1].api_key, self.KEY)
+        self.assertEqual(self.tester_calls[-1].base_url, "https://ai.example.test/v1")
+
+        self.tester_result = ["something-else"]
+        result = self.client.post("/api/admin/ai-config/test", json=body, headers=self.headers).get_json()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["model_found"])
+
+        self.tester_result = None
+        result = self.client.post("/api/admin/ai-config/test", json=body, headers=self.headers).get_json()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["models_listed"])
+
+        self.tester_result = AIRequestError("AI 服务认证失败，请检查服务端密钥与权限。", "authentication_failed")
+        result = self.client.post("/api/admin/ai-config/test", json=body, headers=self.headers).get_json()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["code"], "authentication_failed")
+        self.assertNotIn(self.KEY, json.dumps(result))
+
+    def test_clearing_settings_disables_cloud_mode(self):
+        self.assertEqual(self.save().status_code, 200)
+        cleared = self.client.delete("/api/admin/ai-config", headers=self.headers)
+        self.assertEqual(cleared.status_code, 200, cleared.get_json())
+        self.assertFalse(cleared.get_json()["api_key_set"])
+        self.assertEqual(cleared.get_json()["source"], "none")
+        self.assertFalse(self.client.get("/api/ai/capabilities").get_json()["cloud_available"])
+        self.assertFalse((Path(self.temp.name) / "ai_settings.json").exists())
+
+    def test_environment_key_is_used_until_web_settings_exist(self):
+        with patch.dict(os.environ, {"FIGSTUDIO_AI_API_KEY": "env-key-1234567890", "FIGSTUDIO_AI_BASE_URL": "https://env.example.test"}):
+            app = self.make_app()
+        client = app.test_client()
+        status = client.get("/api/auth/status").get_json()
+        client.post("/api/auth/login", json={"username": "test-admin", "password": "testing-pass-123"}, headers={"X-CSRF-Token": status["csrf_token"]})
+        current = client.get("/api/admin/ai-config").get_json()
+        self.assertEqual(current["source"], "environment")
+        self.assertTrue(current["api_key_set"])
+        self.assertTrue(current["cloud_available"])
+        self.assertNotIn("env-key", json.dumps(current))
+
+    def test_editors_cannot_read_or_change_the_service_settings(self):
+        created = self.client.post(
+            "/api/admin/users", json={"username": "editor-one", "password": "editor-pass-123", "role": "editor"}, headers=self.headers
+        )
+        self.assertEqual(created.status_code, 201, created.get_json())
+        other = self.app.test_client()
+        status = other.get("/api/auth/status").get_json()
+        login = other.post("/api/auth/login", json={"username": "editor-one", "password": "editor-pass-123"},
+                           headers={"X-CSRF-Token": status["csrf_token"]})
+        self.assertEqual(login.status_code, 200, login.get_json())
+        csrf = login.get_json()["csrf_token"]
+        self.assertEqual(other.get("/api/admin/ai-config").status_code, 403)
+        self.assertEqual(other.put("/api/admin/ai-config", json={"api_key": "x"}, headers={"X-CSRF-Token": csrf}).status_code, 403)
+        self.assertEqual(other.post("/api/admin/ai-config/test", json={}, headers={"X-CSRF-Token": csrf}).status_code, 403)
+        self.assertFalse(self.settings()["api_key_set"])

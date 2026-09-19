@@ -1,0 +1,3 @@
+# Web editor (web_app.py): Flask plus a portable FFmpeg binary. No Qt or ONNX needed.
+Flask>=3.0,<4
+imageio-ffmpeg>=0.5

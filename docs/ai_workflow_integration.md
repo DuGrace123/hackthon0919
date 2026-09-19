@@ -1,6 +1,33 @@
 # 成员 1 + 成员 4：工程存储与 AI 工作流接入说明
 
-`python -m backend` 现在同时提供成员 1 的工程存储和成员 4 的 AI 工作流，统一使用 `/api/v1`。`backend/ai_adapter.py` 将方案应用、撤销接到真实 `ProjectStore`，已保存的修改能在服务重启后重新打开。上传/媒体服务、浏览器界面仍由对应成员接入；现有桌面入口继续使用原流程。
+`python -m backend` 现在同时提供成员 1 的工程存储和成员 4 的 AI 工作流，统一使用 `/api/v1`。`backend/ai_adapter.py` 将方案应用、撤销接到真实 `ProjectStore`，已保存的修改能在服务重启后重新打开。网页编辑器 `web_app.py` 已把同一套工作流挂到自己的素材库和工程上（见下文「网页编辑器接入」），这是唯一的产品界面；桌面入口不再是开发目标。
+
+## 网页编辑器接入（已实现）
+
+`web_app.py` 直接实例化 `AIWorkflow`，用 `EditorAIBackend` 实现 `WorkflowBackend`：工程是网页编辑器内存中的单一工程（固定 ID `workspace`），素材来自网页上传目录的服务端目录记录，浏览器永远不提交路径。所有路由都经过现有的登录、会话与 CSRF 检查，`owner_id` 取当前登录账户，因此一个账户生成的方案对其他账户不可见。
+
+| 请求 | 用途 |
+| --- | --- |
+| `GET /api/ai/capabilities` | 本地/云端可用性、限制与用户提示 |
+| `GET /api/ai/sources` | 可参与 AI 剪辑的视频素材（音频文件不列出）与当前 `revision` |
+| `GET /api/ai/plans` | 当前账户未过期的方案列表（最新在前），页面刷新后据此恢复进行中、待确认或已应用的方案 |
+| `POST /api/ai/plans` | 创建分析任务（`media_ids`、`revision`、`mode`、`target_duration`、`prompt`、`cloud_consent`），返回 202 |
+| `GET /api/ai/plans/{plan_id}` | 查询状态与镜头预览 |
+| `POST /api/ai/plans/{plan_id}/cancel` | 取消任务或放弃未应用方案 |
+| `POST /api/ai/plans/{plan_id}/apply` | `{"revision": n, "confirm": true}`，成功时同时返回 `plan` 和最新工程状态 |
+| `POST /api/ai/plans/{plan_id}/undo` | `{"revision": n}`，恢复应用前的完整工程 |
+| `GET /api/admin/ai-config` | 管理员：当前云端配置（密钥只返回是否已设置和掩码提示）、来源（网页设置 / 环境变量 / 未配置）、云端是否可用 |
+| `PUT /api/admin/ai-config` | 管理员：保存接口地址（仅 HTTPS）、API Key（留空沿用已保存密钥）、视觉模型、转写模型、超时，保存后立即生效 |
+| `DELETE /api/admin/ai-config` | 管理员：删除网页保存的配置，回退到环境变量或仅本地模式 |
+| `POST /api/admin/ai-config/test` | 管理员：用提交的配置（密钥可省略）请求服务商 `/v1/models`，返回是否连通及模型名是否存在 |
+
+版本规则：`GET /api/project` 返回的 `project.revision` 在每次实际改动（加片段、裁剪、字幕、转场、排序、删除、改标题或画幅）后加一；仅重复提交相同标题/画幅不会加一，所以「保存工程」不会让待应用的方案失效。生成方案时带上当前 `revision`；应用时若工程已被手工修改则返回 409 `revision_conflict`，方案不会覆盖它没见过的编辑。应用成功后工程会立即原子写入 `web_workspace/project.ljproject`，并在 `edit_log` 追加 `apply_ai_plan`；撤销同样落盘。AI 片段带 `ai_selected: true`，时间线以「AI」标签显示，片段编辑接受 `edit_plan.ALLOWED_TRANSITIONS` 中的全部转场，因此 AI 片段可以继续手工修改。
+
+错误响应统一为 `{"error": "<提示>", "code": "<错误码>"}`，状态码与本文「成员 3：浏览器接口」一节相同。
+
+云端配置由管理员在「账户管理 → AI 接口」中填写，服务端以 `protect_secret` 保存到 `web_workspace/ai_settings.json`（Windows 为 DPAPI，其他系统为 0600 权限文件），优先于「服务端云端配置」一节的环境变量；`AIWorkflow.configure_cloud()` 在保存后即时切换配置，进行中的任务沿用启动时的配置。密钥不回传浏览器、不写入工程文件，编辑成员账户无法读取或修改。未配置时 `capabilities.cloud_available` 为 `false`，面板中的云端选项会被禁用并提示管理员前往配置。
+
+`tests/test_web_app.py::AIServiceSettingsTests` 覆盖：未配置状态、保存后云端可用且密钥掩码与文件保护、重启后保留、HTTP/缺密钥/超时校验、连接测试沿用已保存密钥并核对模型名、清除回退、环境变量回退、编辑成员 403。`tests/test_web_app.py::AIDirectorTests` 用假分析器覆盖：能力与素材列表、预览不改工程、应用落盘、撤销恢复、手工编辑后 409、无改动 PATCH 不影响方案、确认与版本校验、取消、音频素材拒绝、云端同意与可用性、AI 转场可编辑、跨账户不可见与未登录 401。
 
 ## 已实现的行为
 

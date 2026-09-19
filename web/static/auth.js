@@ -21,8 +21,11 @@ function applyLanguage() {
   document.documentElement.lang = state.lang === 'en' ? 'en' : 'zh-CN';
   document.title = t('pageTitle');
   document.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
-  $('#languageToggle').textContent = state.lang === 'zh' ? 'EN' : '中文';
-  $('#languageToggle').title = t('switchLanguage');
+  document.querySelectorAll('.language-switch button').forEach((button) => {
+    const active = button.dataset.lang === state.lang;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
   $('#formEyebrow').textContent = state.setup ? t('setupEyebrow') : 'WELCOME BACK';
   $('#formTitle').textContent = t(state.setup ? 'setupTitle' : 'loginTitle');
   $('#formDescription').textContent = t(state.setup ? 'setupDescription' : 'loginDescription');
@@ -40,11 +43,11 @@ async function request(url, options = {}) {
   return data;
 }
 
-$('#languageToggle').addEventListener('click', () => {
-  state.lang = state.lang === 'zh' ? 'en' : 'zh';
+document.querySelectorAll('.language-switch button').forEach((button) => button.addEventListener('click', () => {
+  state.lang = button.dataset.lang === 'en' ? 'en' : 'zh';
   localStorage.setItem('lingjian-language', state.lang);
   applyLanguage();
-});
+}));
 
 $('#authForm').addEventListener('submit', async (event) => {
   event.preventDefault();

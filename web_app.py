@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import copy
 import hmac
 import json
@@ -18,6 +19,17 @@ from flask import Flask, g, jsonify, redirect, render_template, request, send_fr
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
+from ai_story_planner import AIRequestError, APIConfig, list_models, protect_secret, unprotect_secret
+from ai_workflow import (
+    AIWorkflow,
+    MediaSource,
+    ProjectSnapshot,
+    RevisionConflict,
+    WorkflowError,
+    config_from_environment,
+    validate_cloud_config,
+)
+from edit_plan import ALLOWED_TRANSITIONS
 from video_editing_engine import (
     AUDIO_EXT,
     VIDEO_EXT,
@@ -27,11 +39,35 @@ from video_editing_engine import (
     probe_media,
     validate_rendered_mp4,
 )
-from web_auth import AccountStore, validate_password, validate_role, validate_username
+from web_auth import AccountStore, utc_now, validate_password, validate_role, validate_username
 
 
 ROOT = Path(__file__).resolve().parent
 ALLOWED_EXTENSIONS = VIDEO_EXT | AUDIO_EXT
+WEB_PROJECT_ID = "workspace"  # The web editor keeps one working project per workspace.
+CAPTION_MAX_CHARS = 120
+# Manual picks plus every transition an AI plan may assign, so AI clips stay editable.
+WEB_TRANSITIONS = {"none", "fade", "dissolve", "wipeleft", "wiperight", "slideup", "slidedown"} | set(ALLOWED_TRANSITIONS)
+
+
+def resolve_ffmpeg() -> str:
+    """LINGJIAN_FFMPEG, then the bundled ffmpeg.exe (Windows only), PATH, then imageio-ffmpeg."""
+    configured = os.environ.get("LINGJIAN_FFMPEG")
+    if configured:
+        return shutil.which(configured) or (configured if Path(configured).is_file() else "")
+    if os.name == "nt":
+        bundled = ROOT / "ffmpeg.exe"
+        if bundled.is_file():
+            return str(bundled)
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, RuntimeError):
+        return ""
 
 
 def _load_secret_key(workspace: Path) -> str:
@@ -53,6 +89,38 @@ def _atomic_json(path: Path, data: dict) -> None:
     os.replace(temporary, path)
 
 
+def _load_ai_settings(path: Path) -> dict | None:
+    """Admin-saved cloud settings; the key is stored with protect_secret (DPAPI on Windows)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        data["api_key"] = unprotect_secret(str(data.get("api_key") or ""))
+        return data
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _save_ai_settings(path: Path, data: dict) -> None:
+    payload = {**data, "api_key": protect_secret(str(data.get("api_key") or ""))}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(temporary, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _default_cloud_tester(config: APIConfig) -> list[str] | None:
+    return list_models(config, timeout=15)
+
+
 def _default_export_runner(ffmpeg: str, project: Project, output: Path) -> dict:
     width, height = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (1080, 1080)}.get(
         project.ratio, (720, 1280)
@@ -72,7 +140,8 @@ def _default_export_runner(ffmpeg: str, project: Project, output: Path) -> dict:
     return validate_rendered_mp4(ffmpeg, str(output))
 
 
-def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner=None) -> Flask:
+def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner=None, ai_analyzer=None,
+               cloud_tester=None) -> Flask:
     app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
     app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
 
@@ -81,6 +150,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     export_path = workspace_path / "exports"
     project_path = workspace_path / "project.ljproject"
     catalog_path = workspace_path / "media_catalog.json"
+    ai_settings_path = workspace_path / "ai_settings.json"
     upload_path.mkdir(parents=True, exist_ok=True)
     export_path.mkdir(parents=True, exist_ok=True)
     app.secret_key = _load_secret_key(workspace_path)
@@ -91,9 +161,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     )
     accounts = AccountStore(workspace_path / "accounts.sqlite3")
 
-    configured_ffmpeg = os.environ.get("LINGJIAN_FFMPEG")
-    bundled_ffmpeg = ROOT / "ffmpeg.exe"
-    ffmpeg = configured_ffmpeg or (str(bundled_ffmpeg) if bundled_ffmpeg.exists() else shutil.which("ffmpeg"))
+    ffmpeg = resolve_ffmpeg()
     probe = probe_fn or probe_media
     run_export = export_runner or _default_export_runner
     lock = threading.RLock()
@@ -154,6 +222,19 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     except Exception:
         catalog = {}
 
+    # Every content change increments the revision so AI plans can detect edits made
+    # after they were generated (optimistic lock, mirrors the backend project store).
+    revision = 1
+
+    def bump_revision() -> None:
+        nonlocal revision
+        revision += 1
+
+    def replace_project(candidate: Project) -> None:
+        nonlocal project
+        project = candidate
+        bump_revision()
+
     def save_catalog() -> None:
         _atomic_json(catalog_path, catalog)
 
@@ -177,6 +258,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
                 "title": project.title,
                 "ratio": project.ratio,
                 "duration": project.duration,
+                "revision": revision,
                 "clips": [clip_json(clip) for clip in project.clips],
             },
             "media": [
@@ -346,16 +428,21 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     def update_project():
         payload = request.get_json(silent=True) or {}
         with lock:
+            changed = False
             if "title" in payload:
                 title = str(payload["title"]).strip()
                 if not title or len(title) > 120:
                     raise ValueError("工程名称应为 1–120 个字符")
+                changed = changed or title != project.title
                 project.title = title
             if "ratio" in payload:
                 ratio = str(payload["ratio"])
                 if ratio not in {"9:16", "16:9", "1:1"}:
                     raise ValueError("不支持的画幅")
+                changed = changed or ratio != project.ratio
                 project.ratio = ratio
+            if changed:
+                bump_revision()
             return jsonify(state_json())
 
     @app.post("/api/media/upload")
@@ -391,6 +478,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
                 "width": int(metadata.get("width") or 0),
                 "height": int(metadata.get("height") or 0),
                 "codec": str(metadata.get("codec") or "unknown"),
+                "capture_order": str(metadata.get("capture_order") or ""),
                 "created_at": uuid.uuid1().hex,
             }
             catalog[media_id] = item
@@ -414,6 +502,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             project.clips.append(
                 Clip(item["path"], start, end, item["name"], has_audio=bool(item["has_audio"]))
             )
+            bump_revision()
             return jsonify(state_json()), 201
 
     @app.patch("/api/timeline/clips/<clip_id>")
@@ -435,7 +524,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
                 clip.caption = caption
             if "transition" in payload:
                 transition = str(payload["transition"])
-                if transition not in {"none", "fade", "dissolve", "wipeleft", "wiperight", "slideup", "slidedown"}:
+                if transition not in WEB_TRANSITIONS:
                     raise ValueError("不支持的转场")
                 clip.transition = transition
             if "volume" in payload:
@@ -448,6 +537,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             except Exception:
                 clip.__dict__.update(before.__dict__)
                 raise
+            bump_revision()
             return jsonify(state_json())
 
     @app.delete("/api/timeline/clips/<clip_id>")
@@ -457,6 +547,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             if index < 0:
                 raise ValueError("找不到该时间线片段")
             project.clips.pop(index)
+            bump_revision()
             return jsonify(state_json())
 
     @app.post("/api/timeline/reorder")
@@ -468,6 +559,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             if len(ordered_ids) != len(current) or set(ordered_ids) != set(current):
                 raise ValueError("排序列表必须完整包含当前时间线片段")
             project.clips = [current[clip_id] for clip_id in ordered_ids]
+            bump_revision()
             return jsonify(state_json())
 
     @app.post("/api/project/save")
@@ -475,6 +567,258 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
         with lock:
             _atomic_json(project_path, project.to_dict())
             return jsonify(saved=True, path=str(project_path))
+
+    # ---------------------------------------------------------------- AI director
+    class EditorAIBackend:
+        """WorkflowBackend over the single in-memory project and the upload catalog.
+
+        Media is resolved from server-side catalog records only; clients never send paths.
+        commit_project compares the revision and writes the project file inside the editor lock.
+        """
+
+        @staticmethod
+        def _check(project_id: str, owner_id: str) -> None:
+            if project_id != WEB_PROJECT_ID or not owner_id:
+                raise WorkflowError("not_found", "工程不可用。", 404)
+
+        def get_project(self, project_id: str, owner_id: str) -> ProjectSnapshot:
+            self._check(project_id, owner_id)
+            with lock:
+                return ProjectSnapshot(copy.deepcopy(project), revision)
+
+        def resolve_media(self, project_id: str, media_id: str, owner_id: str) -> MediaSource:
+            self._check(project_id, owner_id)
+            with lock:
+                item = copy.deepcopy(catalog.get(media_id))
+            if not item:
+                raise WorkflowError("not_found", "素材库中没有该素材，请刷新页面后重试。", 404)
+            if not int(item.get("width") or 0):
+                raise WorkflowError("invalid_media", "只有视频素材可以参与 AI 剪辑，请取消选择音频文件。", 422)
+            if ai_analyzer is None and not ffmpeg:
+                raise WorkflowError("ffmpeg_unavailable", "未找到 FFmpeg，请设置 LINGJIAN_FFMPEG 后重启服务。", 503)
+            return MediaSource(
+                str(item["id"]), Path(item["path"]), str(item["name"]), float(item["duration"]),
+                bool(item.get("has_audio")), str(item.get("capture_order") or ""),
+            )
+
+        def commit_project(self, project_id: str, owner_id: str, candidate: Project,
+                           expected_revision: int, *, expected_token: str | None = None) -> ProjectSnapshot:
+            self._check(project_id, owner_id)
+            with lock:
+                if revision != expected_revision:
+                    raise RevisionConflict()
+                payload = candidate.to_dict()
+                try:
+                    _atomic_json(project_path, payload)
+                except OSError:
+                    raise WorkflowError("save_failed", "工程写入磁盘失败，请检查磁盘空间后重试。", 503) from None
+                replace_project(Project.from_dict(payload))
+                return ProjectSnapshot(copy.deepcopy(project), revision)
+
+    # Cloud AI configuration: settings saved by an administrator in the web UI win over
+    # the server environment. Keys stay on the server and are never returned to browsers.
+    env_config = config_from_environment()
+    ai_settings = _load_ai_settings(ai_settings_path)
+    check_cloud = cloud_tester or _default_cloud_tester
+
+    def cloud_config_from(saved: dict | None) -> APIConfig:
+        if not saved or not saved.get("api_key"):
+            return env_config
+        return APIConfig(
+            base_url=str(saved.get("base_url") or env_config.base_url), api_key=str(saved["api_key"]),
+            model=str(saved.get("model") or env_config.model),
+            transcription_model=str(saved.get("transcription_model") or env_config.transcription_model),
+            timeout=int(saved.get("timeout") or env_config.timeout),
+        )
+
+    workflow_options = {"caption_limit": CAPTION_MAX_CHARS}
+    if ai_analyzer is not None:
+        workflow_options["local_analyzer"] = ai_analyzer
+    try:
+        workflow = AIWorkflow(EditorAIBackend(), ffmpeg or "", cloud_config=cloud_config_from(ai_settings), **workflow_options)
+    except ValueError as exc:
+        app.logger.warning("云端 AI 配置无效，已回退为仅本地模式：%s", exc)
+        workflow = AIWorkflow(EditorAIBackend(), ffmpeg or "", **workflow_options)
+    app.ai_workflow = workflow  # Tests and embedders close it explicitly.
+    atexit.register(workflow.close)
+
+    def ai_config_public() -> dict:
+        config = workflow.config
+        key = config.api_key or ""
+        return {
+            "base_url": config.base_url, "model": config.model, "transcription_model": config.transcription_model,
+            "timeout": config.timeout, "api_key_set": bool(key),
+            "api_key_hint": f"{key[:3]}…{key[-4:]}" if len(key) >= 12 else ("•••" if key else ""),
+            "source": "settings" if ai_settings else ("environment" if env_config.api_key else "none"),
+            "cloud_available": workflow.capabilities()["cloud_available"],
+            "updated_at": str((ai_settings or {}).get("updated_at") or ""),
+            "updated_by": str((ai_settings or {}).get("updated_by") or ""),
+        }
+
+    def parse_ai_config(payload: dict) -> APIConfig:
+        current = workflow.config
+
+        def text(name: str, default: str, limit: int) -> str:
+            value = payload.get(name, default)
+            if value is None:
+                value = default
+            if not isinstance(value, str):
+                raise ValueError("请求格式不正确")
+            value = value.strip()
+            if len(value) > limit:
+                raise ValueError("字段过长，请检查输入")
+            return value
+
+        base_url = text("base_url", current.base_url, 300) or current.base_url
+        if not base_url.lower().startswith("https://"):
+            raise ValueError("接口地址必须以 https:// 开头")
+        model = text("model", current.model, 100) or current.model
+        transcription_model = text("transcription_model", current.transcription_model, 100) or current.transcription_model
+        timeout = payload.get("timeout", current.timeout)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 180:
+            raise ValueError("单次请求超时需为 1–180 秒")
+        api_key = text("api_key", "", 512)
+        if any(character.isspace() for character in api_key):
+            raise ValueError("API Key 不能包含空格或换行")
+        api_key = api_key or current.api_key or ""
+        if not api_key:
+            raise ValueError("请填写 API Key")
+        config = APIConfig(base_url=base_url, api_key=api_key, model=model,
+                           transcription_model=transcription_model, timeout=int(timeout))
+        try:
+            validate_cloud_config(config)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from None
+        return config
+
+    @app.get("/api/admin/ai-config")
+    @require_admin
+    def get_ai_config():
+        return jsonify(ai_config_public())
+
+    @app.put("/api/admin/ai-config")
+    @require_admin
+    def save_ai_config():
+        nonlocal ai_settings
+        config = parse_ai_config(request.get_json(silent=True) or {})
+        record = {
+            "base_url": config.base_url, "api_key": config.api_key, "model": config.model,
+            "transcription_model": config.transcription_model, "timeout": config.timeout,
+            "updated_at": utc_now(), "updated_by": current_account()["username"],
+        }
+        _save_ai_settings(ai_settings_path, record)
+        workflow.configure_cloud(config)
+        ai_settings = record
+        return jsonify(ai_config_public())
+
+    @app.delete("/api/admin/ai-config")
+    @require_admin
+    def clear_ai_config():
+        nonlocal ai_settings
+        ai_settings_path.unlink(missing_ok=True)
+        ai_settings = None
+        try:
+            workflow.configure_cloud(env_config)
+        except ValueError:
+            workflow.configure_cloud(None)
+        return jsonify(ai_config_public())
+
+    @app.post("/api/admin/ai-config/test")
+    @require_admin
+    def test_ai_config():
+        config = parse_ai_config(request.get_json(silent=True) or {})
+        try:
+            models = check_cloud(config)
+        except AIRequestError as exc:
+            return jsonify(ok=False, code=exc.code, error=str(exc))
+        except ValueError as exc:
+            return jsonify(ok=False, code="invalid_config", error=str(exc))
+        listed = isinstance(models, list)
+        return jsonify(
+            ok=True, models_listed=listed, model_count=len(models) if listed else 0,
+            model_found=(config.model in models) if listed else None,
+            transcription_model_found=(config.transcription_model in models) if listed else None,
+        )
+
+    def ai_owner() -> str:
+        user = current_account()
+        return f"user-{user['id']}" if user else ""
+
+    def ai_payload() -> dict:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise WorkflowError("invalid_request", "请求格式不正确。", 422)
+        return payload
+
+    def ai_revision(value) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise WorkflowError("invalid_revision", "缺少工程版本，请刷新页面后重试。", 422)
+        return value
+
+    @app.errorhandler(WorkflowError)
+    def workflow_error(error: WorkflowError):
+        return jsonify(error=str(error), code=error.code), error.status
+
+    @app.get("/api/ai/capabilities")
+    def ai_capabilities():
+        return jsonify(workflow.capabilities())
+
+    @app.get("/api/ai/sources")
+    def ai_sources():
+        with lock:
+            items = [
+                {"id": item["id"], "name": item["name"], "duration": item["duration"], "has_audio": bool(item.get("has_audio"))}
+                for item in sorted(catalog.values(), key=lambda value: value.get("created_at", ""))
+                if int(item.get("width") or 0)
+            ]
+            return jsonify(items=items, revision=revision)
+
+    @app.get("/api/ai/plans")
+    def ai_list_plans():
+        return jsonify(plans=workflow.list(WEB_PROJECT_ID, ai_owner()))
+
+    @app.post("/api/ai/plans")
+    def ai_create_plan():
+        payload = ai_payload()
+        media_ids = payload.get("media_ids")
+        if not isinstance(media_ids, list) or not all(isinstance(value, str) for value in media_ids):
+            raise WorkflowError("invalid_sources", "请选择 1 到 20 份素材。", 422)
+        target = payload.get("target_duration", 30)
+        if isinstance(target, bool) or not isinstance(target, (int, float)):
+            raise WorkflowError("invalid_duration", "目标时长必须为 5 到 180 秒。", 422)
+        mode, prompt = payload.get("mode", "local"), payload.get("prompt", "")
+        if not isinstance(mode, str) or not isinstance(prompt, str):
+            raise WorkflowError("invalid_request", "请求格式不正确。", 422)
+        plan = workflow.create(
+            WEB_PROJECT_ID, ai_owner(), media_ids=media_ids, revision=ai_revision(payload.get("revision")),
+            mode=mode, target_duration=target, prompt=prompt, cloud_consent=payload.get("cloud_consent") is True,
+        )
+        return jsonify(plan), 202
+
+    @app.get("/api/ai/plans/<plan_id>")
+    def ai_get_plan(plan_id: str):
+        return jsonify(workflow.get(WEB_PROJECT_ID, plan_id, ai_owner()))
+
+    @app.post("/api/ai/plans/<plan_id>/cancel")
+    def ai_cancel_plan(plan_id: str):
+        return jsonify(workflow.cancel(WEB_PROJECT_ID, plan_id, ai_owner()))
+
+    @app.post("/api/ai/plans/<plan_id>/apply")
+    def ai_apply_plan(plan_id: str):
+        payload = ai_payload()
+        plan = workflow.apply(
+            WEB_PROJECT_ID, plan_id, ai_owner(),
+            revision=ai_revision(payload.get("revision")), confirm=payload.get("confirm") is True,
+        )
+        with lock:
+            return jsonify(plan=plan, **state_json())
+
+    @app.post("/api/ai/plans/<plan_id>/undo")
+    def ai_undo_plan(plan_id: str):
+        payload = ai_payload()
+        plan = workflow.undo(WEB_PROJECT_ID, plan_id, ai_owner(), revision=ai_revision(payload.get("revision")))
+        with lock:
+            return jsonify(plan=plan, **state_json())
 
     @app.post("/api/export")
     def export_project():

@@ -79,6 +79,27 @@ def _request(url,data,headers,timeout):
     except (urllib.error.URLError,OSError,TimeoutError):
         raise AIRequestError('AI 服务连接失败或超时，请稍后重试。','connection_failed',True) from None
 
+def list_models(cfg:APIConfig,timeout:float=15)->list[str]|None:
+    """GET /v1/models with the configured key. Returns model ids, or None when the service has no model list (404)."""
+    req=urllib.request.Request(cfg.endpoint('models'),headers={'Authorization':'Bearer '+cfg.api_key},method='GET')
+    try:
+        with urllib.request.build_opener(_NoRedirect()).open(req,timeout=timeout) as r:
+            raw=r.read(4*1024*1024+1)
+            if len(raw)>4*1024*1024:raise AIRequestError('AI 响应超过大小限制。','response_too_large')
+            result=_json_object(raw)
+    except urllib.error.HTTPError as e:
+        status=e.code;e.close()
+        if status in (401,403):raise AIRequestError('AI 服务认证失败，请检查服务端密钥与权限。','authentication_failed') from None
+        if status==404:return None
+        if status==429:raise AIRequestError('AI 服务用量或请求频率受限，请稍后重试。','rate_limited',True) from None
+        raise AIRequestError(f'AI 服务请求失败（HTTP {status}）。','provider_http_error',status>=500) from None
+    except AIRequestError:raise
+    except (urllib.error.URLError,OSError,TimeoutError):
+        raise AIRequestError('AI 服务连接失败或超时，请稍后重试。','connection_failed',True) from None
+    data=result.get('data')
+    if not isinstance(data,list):return None
+    return [item['id'] for item in data[:5000] if isinstance(item,dict) and isinstance(item.get('id'),str)]
+
 def transcribe_audio(cfg:APIConfig,audio_path:str)->str:
     if Path(audio_path).stat().st_size>24_000_000:
         raise AIRequestError('提取音频超过上传限制，请缩短素材后重试。','audio_too_large')

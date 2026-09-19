@@ -19,6 +19,7 @@
     {% if current_user.role == 'admin' %}<a class="account-action" href="{{ url_for('account_admin_page') }}" data-i18n="accounts">账户管理</a>{% endif %}
     <span class="user-chip" title="{{ current_user.role }}">{{ current_user.username }}</span>
     <button id="logoutBtn" class="account-action" type="button" data-i18n="logout">退出</button>
+    <button id="aiBtn" class="ai-button" type="button" data-i18n="aiDirector">AI 导演</button>
     <button id="saveBtn" class="secondary" data-i18n="saveProject">保存工程</button>
     <button id="exportBtn" class="primary" data-i18n="exportMp4">导出 MP4</button>
   </header>
@@ -96,6 +97,67 @@
 
   <div id="exportDialog" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card"><span class="spinner large"></span><h3 data-i18n="exporting">正在导出 MP4</h3><p id="exportMessage" data-i18n="preparingRender">正在准备渲染任务…</p><div class="progress-track"><div id="exportBar"></div></div><a id="downloadLink" class="primary button-link hidden" data-i18n="downloadExport">下载导出文件</a><button id="closeExport" class="secondary hidden" data-i18n="close">关闭</button></div>
+  </div>
+
+  <div id="aiDialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="aiDialogTitle">
+    <div class="modal-card ai-card">
+      <div class="ai-heading">
+        <div><p class="eyebrow">AI DIRECTOR</p><h3 id="aiDialogTitle" data-i18n="aiDirector">AI 导演</h3></div>
+        <button id="aiClose" class="icon-button" type="button" aria-label="关闭" data-i18n-aria-label="close">✕</button>
+      </div>
+      <p id="aiNotice" class="ai-notice"></p>
+      <p id="aiCloudHint" class="ai-hint hidden"></p>
+
+      <form id="aiSetup" class="ai-setup">
+        <fieldset class="ai-sources">
+          <legend data-i18n="aiSources">选择参与剪辑的素材</legend>
+          <div id="aiSourceList" class="ai-source-list"></div>
+          <p id="aiSourceEmpty" class="ai-hint hidden" data-i18n="aiNoSources">素材库里还没有视频，请先导入视频文件。</p>
+        </fieldset>
+        <div class="ai-grid">
+          <label><span data-i18n="aiMode">分析模式</span>
+            <select id="aiMode"><option value="local" data-i18n="aiModeLocal">本地分析（不上传素材）</option><option value="cloud" data-i18n="aiModeCloud">云端分析</option></select>
+          </label>
+          <label><span data-i18n="aiTarget">目标时长（秒）</span><input id="aiTarget" type="number" min="5" max="180" step="1" value="30" required></label>
+        </div>
+        <label><span data-i18n="aiPrompt">剪辑要求</span><textarea id="aiPrompt" rows="3" maxlength="2000" placeholder="例如：按真实拍摄顺序，保留关键动作和结尾" data-i18n-placeholder="aiPromptPlaceholder"></textarea></label>
+        <label id="aiConsentRow" class="ai-consent hidden"><input id="aiConsent" type="checkbox"><span data-i18n="aiConsent">我了解云端分析会上传抽帧图片、音频和剪辑要求，并可能产生 API 费用。</span></label>
+        <div class="ai-actions"><button id="aiStart" class="primary" type="submit" data-i18n="aiStart">生成方案</button></div>
+      </form>
+
+      <div id="aiProgress" class="ai-progress hidden">
+        <span class="spinner large"></span>
+        <p id="aiProgressMessage"></p>
+        <div class="progress-track"><div id="aiBar"></div></div>
+        <button id="aiCancel" class="secondary" type="button" data-i18n="aiCancel">取消分析</button>
+      </div>
+
+      <div id="aiResult" class="ai-result hidden">
+        <p id="aiSummary" class="ai-summary"></p>
+        <ul id="aiChanges" class="ai-list"></ul>
+        <ul id="aiWarnings" class="ai-list warnings hidden"></ul>
+        <div id="aiShots" class="ai-shots" aria-label="AI 镜头清单" data-i18n-aria-label="aiShotList"></div>
+        <div class="ai-actions">
+          <button id="aiDiscard" class="secondary" type="button" data-i18n="aiDiscard">放弃方案</button>
+          <button id="aiApply" class="primary" type="button" data-i18n="aiApply">应用到时间线</button>
+        </div>
+      </div>
+
+      <div id="aiDone" class="ai-done hidden">
+        <div class="empty-icon">✓</div>
+        <p id="aiDoneMessage"></p>
+        <div class="ai-actions">
+          <button id="aiUndo" class="danger" type="button" data-i18n="aiUndo">撤销应用</button>
+          <button id="aiNew" class="secondary" type="button" data-i18n="aiNew">生成新方案</button>
+        </div>
+      </div>
+
+      <div id="aiFailed" class="ai-failed hidden">
+        <div class="empty-icon">!</div>
+        <p id="aiFailedMessage"></p>
+        <div class="ai-actions"><button id="aiRetry" class="primary" type="button" data-i18n="aiRetry">返回重新设置</button></div>
+      </div>
+    </div>
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

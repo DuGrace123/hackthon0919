@@ -35,6 +35,26 @@
         <div id="usersEmpty" class="empty hidden" data-i18n="empty">没有账户。</div>
       </article>
     </section>
+    <section class="panel ai-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">AI SERVICE</p><h2 data-i18n="aiTitle">AI 接口</h2></div>
+        <div class="ai-status"><span id="aiCloudBadge" class="status-badge disabled"></span><span id="aiSourceBadge" class="status-badge"></span></div>
+      </div>
+      <form id="aiForm" class="ai-form">
+        <label class="wide"><span data-i18n="aiBaseUrl">接口地址</span><input id="aiBaseUrl" type="url" maxlength="300" placeholder="https://api.openai.com" autocomplete="off" required></label>
+        <label class="wide"><span data-i18n="aiKey">API Key</span><input id="aiKey" type="password" maxlength="512" autocomplete="off"></label>
+        <label><span data-i18n="aiModel">视觉模型</span><input id="aiModel" maxlength="100" autocomplete="off" required></label>
+        <label><span data-i18n="aiTranscription">转写模型</span><input id="aiTranscription" maxlength="100" autocomplete="off" required></label>
+        <label><span data-i18n="aiTimeout">单次请求超时（秒）</span><input id="aiTimeout" type="number" min="1" max="180" step="1" required></label>
+        <p id="aiUpdated" class="ai-updated"></p>
+        <div class="ai-actions">
+          <button type="button" id="aiTestBtn" data-i18n="aiTest">测试连接</button>
+          <button type="button" id="aiClearBtn" class="danger" data-i18n="aiClear">清除设置</button>
+          <button class="primary" type="submit" id="aiSaveBtn" data-i18n="aiSave">保存设置</button>
+        </div>
+      </form>
+      <p class="hint" data-i18n="aiHint">密钥只保存在服务器的 web_workspace/ai_settings.json（Windows 上由 DPAPI 加密，其他系统仅当前用户可读），不会回传到浏览器，也不写入工程文件。接口需兼容 /v1/responses（图片输入、JSON 输出）与 /v1/audio/transcriptions。保存后，AI 导演面板的云端模式即可使用；留空 API Key 表示沿用已保存的密钥。</p>
+    </section>
   </main>
   <dialog id="passwordDialog">
     <form id="passwordForm" method="dialog">
