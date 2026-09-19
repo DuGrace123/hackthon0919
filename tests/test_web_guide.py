@@ -32,7 +32,7 @@ class UserGuideLanguageTests(unittest.TestCase):
         self.assertIn('Import footage', self.client.get('/guide?lang=unknown').text)
 
     def test_download_matches_language_and_is_an_attachment(self):
-        root = Path(__file__).resolve().parents[1] / 'web/static/guides'
+        root = Path(self.client.application.static_folder) / 'guides'
         for language, filename in [('en', 'lingjian-quick-start.en.pdf'), ('zh', 'lingjian-quick-start.pdf')]:
             with self.subTest(language=language):
                 self.client.set_cookie('lingjian-language', language)
