@@ -1,6 +1,6 @@
 body { background: #fafafa; font-size: 15px; line-height: 1.8; }
 .guide-topbar { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px max(24px, calc((100vw - 960px) / 2)); background: #fff; border-bottom: 1px solid var(--line); }
-.guide-topbar nav { display: flex; gap: 10px; }
+.guide-topbar nav { display: flex; flex-wrap: wrap; gap: 10px; }
 .guide-topbar .button-link { font-size: 13px; }
 .guide-shell { width: min(900px, calc(100% - 48px)); margin: 52px auto 28px; }
 .guide-intro { margin-bottom: 32px; }
@@ -28,7 +28,7 @@ dd { margin: 6px 0 0; color: #5d5d68; font-size: 13px; }
 .guide-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px; margin-top: 32px; font-size: 12px; color: var(--muted); }
 .guide-footer a { text-underline-offset: 3px; }
 @media (max-width: 650px) {
-  .guide-topbar { padding: 14px 18px; gap: 10px; }
+  .guide-topbar { padding: 14px 18px; gap: 10px; flex-wrap: wrap; }
   .guide-topbar .brand small { display: none; }
   .guide-topbar nav { gap: 6px; }
   .guide-topbar .button-link { padding: 7px 9px; font-size: 12px; }

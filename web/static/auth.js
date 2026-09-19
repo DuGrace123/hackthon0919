@@ -8,7 +8,7 @@ const words = {
     setupDescription: '这是首次启动。请创建第一个管理员；以后可在账户管理中添加其他用户。', setupAction: '创建管理员并进入', privacy: '请在离开前保存工程，仅在可信设备上保持登录。', switchLanguage: 'Switch to English', requestFailed: '请求失败'
   },
   en: {
-    userGuide: 'New here? Read the guide (中文)',
+    userGuide: 'New here? Read the guide',
     setupToken: 'Setup key', setupTokenHint: 'The site owner can find this in the hosting dashboard. It is only needed for the first administrator.',
     pageTitle: 'LingJian · Sign In', headline: 'A little cut. A big story.', subhead: 'Import, edit, and export. Make space for your best moments, right in your browser.',
     localData: 'Your creative workspace', localDataHint: 'Sign in to organize your media, shape your clips, and export your story.', username: 'Username', password: 'Password', confirmPassword: 'Confirm password',
@@ -17,11 +17,12 @@ const words = {
   }
 };
 
-const state = { lang: localStorage.getItem('lingjian-language') === 'en' ? 'en' : 'zh', csrf: '', setup: false };
+const state = { lang: LingJianLanguage.get(), csrf: '', setup: false };
 const $ = (selector) => document.querySelector(selector);
 const t = (key) => words[state.lang][key] || key;
 
 function applyLanguage() {
+  LingJianLanguage.set(state.lang);
   document.documentElement.lang = state.lang === 'en' ? 'en' : 'zh-CN';
   document.title = t('pageTitle');
   document.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
@@ -49,7 +50,6 @@ async function request(url, options = {}) {
 
 document.querySelectorAll('.language-switch button').forEach((button) => button.addEventListener('click', () => {
   state.lang = button.dataset.lang === 'en' ? 'en' : 'zh';
-  localStorage.setItem('lingjian-language', state.lang);
   applyLanguage();
 }));
 

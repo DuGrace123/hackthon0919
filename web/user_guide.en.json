@@ -1,0 +1,37 @@
+{
+  "title": "LingJian · Quick Start",
+  "subtitle": "Import, edit, export, download. Four steps to your video.",
+  "url": "https://lingjian-demo.onrender.com",
+  "access": "Open the website and sign in. No installation needed. Ask your administrator for an account.",
+  "ui": {
+    "brand": "LingJian", "page_label": "User Guide",
+    "description": "Learn to import footage, edit with or without AI, export MP4, and understand where your data is stored.",
+    "actions_label": "Guide actions", "download_pdf": "Download PDF", "open_editor": "Open Editor",
+    "eyebrow": "QUICK START · ONE PAGE", "steps_label": "Steps to make a video", "ai_label": "Before using AI",
+    "storage_title": "Where is your data stored?", "download_reminder": "Download your finished video.",
+    "team_label": "Working as a team: ", "faq_title": "Need help?",
+    "footer_prefix": "For the current demo site", "hosting_link": "Free hosting details",
+    "share_pdf": "Get the one-page guide to share with your team",
+    "pdf_eyebrow": "LINGJIAN / ONE-PAGE GUIDE", "pdf_more": "More help: "
+  },
+  "steps": [
+    {"title": "Import footage", "body": "Click Import or drag videos into the media library. Keep each upload batch under 50 MB in total. Start with 2 or 3 short clips."},
+    {"title": "Shape your story", "body": "Click + beside a video to add it to the timeline. Select a clip, set its in/out points and caption, then click Apply changes. Drag clips to reorder and choose your aspect ratio."},
+    {"title": "Let AI help (optional)", "body": "Open AI Director. Choose clips, a target duration and an editing brief, then Generate Plan. Review it and click Apply to Timeline. This replaces existing clips; you can still refine them."},
+    {"title": "Export and download", "body": "Click Save, then Export. When ready, download the MP4. Captions and transitions appear in the exported video; the player previews only the original footage."}
+  ],
+  "ai_tip": "For GPT: an administrator opens Accounts > AI Service, enters the service URL, key and models, tests, then saves settings. Choose Cloud analysis and confirm uploads and API charges. Local analysis runs on the website server without GPT.",
+  "storage": [
+    {"place": "Your computer", "content": "Original footage and downloaded MP4 files."},
+    {"place": "Website server", "content": "Uploads, project, accounts, AI settings and exports awaiting download."},
+    {"place": "GitHub", "content": "Website code and guides, not your uploaded footage."}
+  ],
+  "storage_warning": "The free server loses temporary data, including accounts and uploads, when it sleeps, restarts or redeploys. Save writes only to the server. Keep your originals and download finished videos promptly.",
+  "team_tip": "All accounts share one project and media library. Edit one person at a time; save before handing over, then let the next person refresh.",
+  "faqs": [
+    {"question": "Why is the first visit slow?", "answer": "The free server may be waking up. Allow about a minute."},
+    {"question": "File too large or upload failed?", "answer": "Each batch must total less than 50 MB across all selected files. Split it into smaller batches or compress large files. H.264 MP4 works best for preview. Audio can currently be imported and previewed only."},
+    {"question": "Why did AI generate a plan but no video?", "answer": "Review the plan, click Apply to Timeline, then Export. AI creates the editing plan; FFmpeg renders the video on the server."},
+    {"question": "Do GitHub updates reach the website automatically?", "answer": "This repository is connected to Render. Updates to main deploy automatically after checks pass. Personal branches and unmerged pull requests do not change the live site. If needed, use Manual Deploy > Deploy latest commit in Render. The website address stays the same."}
+  ]
+}

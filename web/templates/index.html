@@ -1,6 +1,6 @@
 {% from '_icons.html' import icon %}
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -17,7 +17,7 @@
     <span class="header-divider" aria-hidden="true"></span>
     <label class="project-name"><span class="sr-only" data-i18n="projectName">工程名称</span><input id="projectTitle" maxlength="120" required></label>
     <div class="topbar-actions">
-      <a class="button-link guide-link" href="{{ url_for('guide_page') }}" target="_blank" rel="noopener" aria-label="使用指南（新标签页）" data-i18n-aria-label="guideNewTab">{{ icon('help') }}<span data-i18n="userGuide">使用指南</span></a>
+      <a class="button-link guide-link" href="{{ url_for('guide_page') }}" data-guide-link target="_blank" rel="noopener" aria-label="使用指南（新标签页）" data-i18n-aria-label="guideNewTab">{{ icon('help') }}<span data-i18n="userGuide">使用指南</span></a>
       <button id="aiBtn" class="ai-button" type="button"><span aria-hidden="true">✦</span><span data-i18n="aiDirector">AI 导演</span></button>
       <button id="saveBtn" class="save-button">{{ icon('save') }}<span data-i18n="saveProject">保存</span></button>
       <button id="exportBtn" class="primary">{{ icon('export') }}<span data-i18n="exportMp4">导出视频</span></button>
@@ -216,6 +216,7 @@
     </div>
   </dialog>
 
+  <script src="{{ url_for('static', filename='language.js') }}"></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </body>
 </html>
