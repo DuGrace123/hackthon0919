@@ -107,9 +107,12 @@ class AIWorkflowTests(unittest.TestCase):
         self.assertEqual(applied['revision'], 2)
         self.assertFalse(self.backend.project.clips[0].has_audio)
         self.assertNotEqual(self.backend.project.clips[0].caption, '客户端篡改')
-        self.assertEqual(self.backend.project.bgm, 'keep.wav')
-        self.assertEqual(self.backend.project.overlays, [])
-        self.assertEqual(self.backend.project.sfx, [])
+        self.assertEqual(self.backend.project.bgm, 'keep.wav', 'existing background music is kept')
+        self.assertTrue(all(overlay.ai_selected for overlay in self.backend.project.overlays), 'old overlays are replaced by the plan\'s own layers')
+        self.assertEqual(len(self.backend.project.overlays), result['result']['changes']['add_overlays'])
+        self.assertEqual(len(self.backend.project.sfx), result['result']['changes']['add_sound_effects'])
+        self.assertTrue(all(Path(cue.path).exists() for cue in self.backend.project.sfx))
+        self.assertEqual(self.backend.project.edit_log[-1]['opening'], result['result']['creative']['preset_id'])
         undone = self.workflow.undo('project-1', result['id'], 'owner-1', revision=2)
         self.assertEqual(undone['revision'], 3)
         self.assertEqual(self.backend.project.to_dict(), before)
@@ -235,6 +238,98 @@ class AIWorkflowTests(unittest.TestCase):
         workflow.close()
         self.assertEqual(workflow.get('project-1', result['id'], 'owner-1')['status'], 'cancelled')
         self.assertEqual(self.backend.commits, 0)
+
+    def test_result_carries_a_readable_report(self):
+        result = self.ready()
+        report = result['result']['report']
+        self.assertIn('本地', report['story'])
+        self.assertEqual(report['order_basis'], 'capture_time')
+        self.assertTrue(any('冷开场' in line for line in report['structure']))
+        self.assertTrue(any('本地分析' in line for line in report['techniques']))
+        self.assertEqual(report['sources'][0]['shots_used'], len(result['result']['shots']))
+        self.assertEqual(report['sources'][0]['capture_time'], '2026-09-19 08:00:00')
+        self.assertIn('镜头方案', report['report_text'])
+        self.assertNotIn(str(self.backend.source.path), report['report_text'])
+        self.assertEqual(result['result']['shots'][0]['role'], 'hook')
+        self.assertIn('capture_stamp', result['result']['shots'][0])
+
+    def test_chronological_opening_and_duplicate_caption_cleanup(self):
+        def talky(ffmpeg, source, checkpoint):
+            return [dict(start=0., end=3., score=70, caption='同一句话', reason='第一段', role='setup'),
+                    dict(start=4., end=7., score=95, caption='同一句话', reason='第二段', role='hook'),
+                    dict(start=9., end=12., score=60, caption='结尾', reason='第三段', role='outro')]
+        workflow = AIWorkflow(self.backend, 'unused-ffmpeg', local_analyzer=talky)
+        self.addCleanup(workflow.close)
+        cold_open = completed(workflow, self.create(workflow, target_duration=9)['id'])
+        self.assertEqual(cold_open['result']['shots'][0]['start'], 4.0, 'default keeps the best shot as a cold open')
+        ordered = completed(workflow, self.create(workflow, target_duration=9, opening='chronological', style='纪录片')['id'])
+        shots = ordered['result']['shots']
+        self.assertEqual([shot['start'] for shot in shots], [0.0, 4.0, 9.0])
+        self.assertEqual([shot['role'] for shot in shots], ['setup', 'development', 'outro'])
+        self.assertEqual([shot['caption'] for shot in shots], ['同一句话', '', '结尾'])
+        self.assertTrue(any('对白相同' in note for note in ordered['result']['repairs']))
+        report = ordered['result']['report']
+        self.assertEqual(report['opening'], 'chronological')
+        self.assertTrue(any('纯时间顺序' in line for line in report['structure']))
+        self.assertTrue(any('纪录片' in line for line in report['techniques']))
+        with self.assertRaises(WorkflowError):
+            self.create(workflow, opening='random')
+
+    def test_sources_without_capture_time_follow_selection_order(self):
+        class TwoSources(MemoryBackend):
+            def __init__(inner, root):
+                super().__init__(root)
+                second = Path(root) / 'second.mp4'
+                second.write_bytes(b'fixture-media-2')
+                inner.sources = {'media-1': replace(inner.source, capture_order=''),
+                                 'media-2': MediaSource('media-2', second, 'second.mp4', 12.0, False, '')}
+            def resolve_media(inner, project_id, media_id, owner_id):
+                inner.access(project_id, owner_id)
+                if media_id not in inner.sources:
+                    raise WorkflowError('not_found', '素材不可用。', 404)
+                return inner.sources[media_id]
+        backend = TwoSources(self.folder.name)
+        workflow = AIWorkflow(backend, 'unused-ffmpeg', local_analyzer=fake_local)
+        self.addCleanup(workflow.close)
+        job = workflow.create('project-1', 'owner-1', media_ids=['media-2', 'media-1'], revision=1,
+                              target_duration=16, opening='chronological')
+        result = completed(workflow, job['id'])
+        self.assertEqual(result['status'], 'ready', result)
+        order = [shot['media_id'] for shot in result['result']['shots']]
+        self.assertEqual(order[0], 'media-2', 'selection order stands in for missing capture times')
+        self.assertEqual(order, sorted(order, key=lambda value: ['media-2', 'media-1'].index(value)))
+        self.assertEqual(result['result']['report']['order_basis'], 'selection')
+        self.assertEqual(result['result']['report']['sources'][0]['capture_time'], '')
+
+    def test_opening_presets_switch_as_a_set_and_music_fills_an_empty_project(self):
+        self.backend.project.bgm = ''
+        result = self.ready(style='旅行叙事')
+        creative = result['result']['creative']
+        self.assertEqual(creative['preset_id'], 'cinematic_window', 'smart recommendation for travel')
+        self.assertEqual(creative['requested'], 'smart')
+        self.assertIn('smart', [item['value'] for item in result['result']['opening_presets']])
+        self.assertEqual(result['result']['global_direction']['music_name'], '旅行微风')
+        self.assertEqual(result['result']['changes']['music'], '旅行微风')
+        self.assertIn('高级开篇', result['result']['report']['report_text'])
+        self.assertIn('全片创意编排', result['result']['report']['report_text'])
+        self.assertTrue(result['result']['validation']['ok'])
+
+        switched = self.workflow.set_opening('project-1', result['id'], 'owner-1', preset='minimal_film')
+        self.assertEqual(switched['result']['creative']['preset_id'], 'minimal_film')
+        self.assertEqual(switched['result']['creative']['requested'], 'minimal_film')
+        self.assertEqual([shot['start'] for shot in switched['result']['shots']],
+                         [shot['start'] for shot in result['result']['shots']], 'switching the opening never reorders the cut')
+        with self.assertRaises(WorkflowError):
+            self.workflow.set_opening('project-1', result['id'], 'owner-1', preset='nope')
+
+        applied = self.workflow.apply('project-1', result['id'], 'owner-1', revision=1, confirm=True)
+        self.assertEqual(applied['status'], 'applied')
+        self.assertEqual(self.backend.project.bgm_id, 'travel_breeze')
+        self.assertTrue(self.backend.project.bgm.endswith('travel_breeze.wav'))
+        self.assertEqual(self.backend.project.edit_log[-1]['opening'], 'minimal_film')
+        self.assertEqual(self.backend.project.clips[0].transition, 'none')
+        with self.assertRaises(WorkflowError):
+            self.workflow.set_opening('project-1', result['id'], 'owner-1', preset='smart')
 
     def test_expired_plan_is_unavailable(self):
         result = self.ready()

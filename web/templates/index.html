@@ -103,7 +103,8 @@
       <div class="panel-heading timeline-toolbar">
         {{ icon('timeline') }}<h2 id="timelineHeading" data-i18n="timeline">时间线</h2><span id="clipCount" class="count-badge">0</span>
         <span class="timeline-tip" data-i18n="reorderHint">拖动片段调整顺序</span>
-        <div class="timeline-controls"><label for="timelineZoom" data-i18n="zoom">缩放</label><input id="timelineZoom" type="range" min="35" max="150" value="70" aria-label="时间线缩放" data-i18n-aria-label="timelineZoom"><span id="timelineDuration" class="duration-chip">0.0 秒</span></div>
+        <div class="timeline-controls"><label for="timelineZoom" data-i18n="zoom">缩放</label><input id="timelineZoom" type="range" min="35" max="150" value="70" aria-label="时间线缩放" data-i18n-aria-label="timelineZoom"><span id="timelineDuration" class="duration-chip">0.0 秒</span>
+          <span id="timelineExtras" class="duration-chip extras hidden"></span></div>
       </div>
       <div id="timelineEmpty" class="timeline-empty"><div class="empty-icon mint">{{ icon('timeline') }}</div><div><strong data-i18n="emptyTimeline">故事，还差第一个镜头</strong><p data-i18n="emptyTimelineHint">点击素材旁的 ＋，将它加入时间线。</p></div></div>
       <div id="timelineWorkspace" class="timeline-workspace hidden">
@@ -136,6 +137,7 @@
       <form id="aiSetup" class="ai-setup">
         <fieldset class="ai-sources">
           <legend data-i18n="aiSources">选择参与剪辑的素材</legend>
+          <p class="ai-hint" data-i18n="aiSourcesHint">正片按拍摄时间推进；没有拍摄时间的素材按下面的先后顺序当作拍摄顺序，可用 ↑ ↓ 调整。</p>
           <div id="aiSourceList" class="ai-source-list"></div>
           <p id="aiSourceEmpty" class="ai-hint hidden" data-i18n="aiNoSources">素材库里还没有视频，请先导入视频文件。</p>
         </fieldset>
@@ -144,6 +146,21 @@
             <select id="aiMode"><option value="local" data-i18n="aiModeLocal">本地分析（不上传素材）</option><option value="cloud" data-i18n="aiModeCloud">云端分析</option></select>
           </label>
           <label><span data-i18n="aiTarget">目标时长（秒）</span><input id="aiTarget" type="number" min="5" max="180" step="1" value="30" required></label>
+          <label><span data-i18n="aiOpening">开头方式</span>
+            <select id="aiOpening"><option value="hook" data-i18n="aiOpeningHook">冷开场：先放最吸引人的镜头，再按时间推进</option><option value="chronological" data-i18n="aiOpeningChrono">纯时间顺序：不用冷开场</option></select>
+          </label>
+          <label><span data-i18n="aiStyle">导演风格</span>
+            <select id="aiStyle">
+              <option value="" data-i18n="aiStyleAuto">自动（按剪辑要求判断）</option>
+              <option value="旅行叙事 · 目标—障碍—发现—回收" data-i18n="aiStyleTravel">旅行叙事 · 目标—障碍—发现—回收</option>
+              <option value="美食教程 · 成品钩子后严格按步骤" data-i18n="aiStyleFood">美食教程 · 成品钩子后严格按步骤</option>
+              <option value="生活记录 · 小目标与阶段性回报" data-i18n="aiStyleLife">生活记录 · 小目标与阶段性回报</option>
+              <option value="剧情短片 · 冲突—尝试—反转—回收" data-i18n="aiStyleDrama">剧情短片 · 冲突—尝试—反转—回收</option>
+              <option value="纪录片 · 尊重事件顺序与完整语义" data-i18n="aiStyleDoc">纪录片 · 尊重事件顺序与完整语义</option>
+              <option value="电影感 · 克制转场与留白" data-i18n="aiStyleCinematic">电影感 · 克制转场与留白</option>
+              <option value="口播知识 · 语义优先并删除停顿" data-i18n="aiStyleTalk">口播知识 · 语义优先并删除停顿</option>
+            </select>
+          </label>
         </div>
         <label><span data-i18n="aiPrompt">剪辑要求</span><textarea id="aiPrompt" rows="3" maxlength="2000" placeholder="例如：按真实拍摄顺序，保留关键动作和结尾" data-i18n-placeholder="aiPromptPlaceholder"></textarea></label>
         <label id="aiConsentRow" class="ai-consent hidden"><input id="aiConsent" type="checkbox"><span data-i18n="aiConsent">我了解云端分析会上传抽帧图片、音频和剪辑要求，并可能产生 API 费用。</span></label>
@@ -158,13 +175,27 @@
       </div>
 
       <div id="aiResult" class="ai-result hidden">
-        <p id="aiSummary" class="ai-summary"></p>
-        <ul id="aiChanges" class="ai-list"></ul>
-        <ul id="aiWarnings" class="ai-list warnings hidden"></ul>
-        <div id="aiShots" class="ai-shots" aria-label="AI 镜头清单" data-i18n-aria-label="aiShotList"></div>
+        <div id="aiVerdict" class="ai-verdict"></div>
+        <ul id="aiBlockers" class="ai-list warnings hidden"></ul>
+        <section class="ai-opening">
+          <h4 data-i18n="aiOpeningTitle">高级开篇方案 · 可整套切换，无需手调蒙版</h4>
+          <select id="aiPreset"></select>
+          <div class="ai-opening-card">
+            <p><strong id="aiOpeningName"></strong> <span id="aiOpeningDuration"></span></p>
+            <p id="aiOpeningSummary"></p>
+            <p id="aiOpeningNote" class="ai-opening-note"></p>
+          </div>
+        </section>
+        <pre id="aiReportText" class="ai-report-text" tabindex="0"></pre>
+        <details class="ai-shot-details">
+          <summary data-i18n="aiShotCards">镜头卡片（点击可在监视器预览）</summary>
+          <div id="aiShots" class="ai-shots" aria-label="AI 镜头清单" data-i18n-aria-label="aiShotList"></div>
+        </details>
+        <p id="aiApplyNote" class="ai-note"></p>
         <div class="ai-actions">
+          <button id="aiCopyReport" class="secondary" type="button" data-i18n="aiCopyReport">复制文字报告</button>
           <button id="aiDiscard" class="secondary" type="button" data-i18n="aiDiscard">放弃方案</button>
-          <button id="aiApply" class="primary" type="button" data-i18n="aiApply">应用到时间线</button>
+          <button id="aiApply" class="primary" type="button" data-i18n="aiApplyFull">应用完整方案到时间线</button>
         </div>
       </div>
 

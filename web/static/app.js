@@ -30,7 +30,18 @@ const translations = {
     aiSelectSources: '请至少选择一份视频素材。', aiStarted: 'AI 正在分析素材…', aiReadyBanner: 'AI 方案已生成，请在 AI 导演面板中预览并确认。', aiApplied: 'AI 方案已应用到时间线，工程已保存。', aiUndone: '已恢复应用前的时间线。', aiCancelled: '已放弃该方案，工程未改变。',
     aiAppliedMessage: '方案已应用：{summary}。时间线上的 AI 片段可以继续手动修改。', aiUndoConfirm: '再点一次确认撤销', aiPreviewShot: '点击在监视器中预览该镜头', aiExpired: 'AI 方案已失效，请重新生成。',
     aiChangeReplace: '替换当前时间线上的 {count} 个视频片段', aiChangeOverlays: '移除 {count} 个叠加层', aiChangeSfx: '移除 {count} 个音效', aiChangeMusic: '保留背景音乐设置', aiChangeSaved: '应用后工程会立即保存到磁盘，并可一键撤销', aiTransition: 'AI 转场：{value}',
-    aiCloudHintAdmin: '云端模式尚未配置：在', aiCloudHintLink: '账户管理 → AI 接口', aiCloudHintAdminTail: '中填写服务地址和 API Key 后即可使用。', aiCloudHintEditor: '云端模式尚未配置，请联系管理员在「账户管理 → AI 接口」中填写 API 设置。'
+    aiCloudHintAdmin: '云端模式尚未配置：在', aiCloudHintLink: '账户管理 → AI 接口', aiCloudHintAdminTail: '中填写服务地址和 API Key 后即可使用。', aiCloudHintEditor: '云端模式尚未配置，请联系管理员在「账户管理 → AI 接口」中填写 API 设置。',
+    aiSourcesHint: '正片按拍摄时间推进；没有拍摄时间的素材按下面的先后顺序当作拍摄顺序，可用 ↑ ↓ 调整。', aiNoCaptureTime: '无拍摄时间', aiMoveUp: '上移', aiMoveDown: '下移', aiOpening: '开头方式', aiOpeningHook: '冷开场：先放最吸引人的镜头，再按时间推进', aiOpeningChrono: '纯时间顺序：不用冷开场',
+    aiStyle: '导演风格', aiStyleAuto: '自动（按剪辑要求判断）', aiStyleTravel: '旅行叙事 · 目标—障碍—发现—回收', aiStyleFood: '美食教程 · 成品钩子后严格按步骤', aiStyleLife: '生活记录 · 小目标与阶段性回报', aiStyleDrama: '剧情短片 · 冲突—尝试—反转—回收', aiStyleDoc: '纪录片 · 尊重事件顺序与完整语义', aiStyleCinematic: '电影感 · 克制转场与留白', aiStyleTalk: '口播知识 · 语义优先并删除停顿',
+    aiStoryTitle: '故事线', aiStructureTitle: '结构与顺序', aiTechniquesTitle: '运用的剪辑手法', aiSourcesTitle: '素材使用', aiChangesTitle: '应用后的改动', aiShotsTitle: '镜头清单：选了什么、为什么', aiCopyReport: '复制文字报告', aiReportCopied: '文字报告已复制到剪贴板。', aiReportCopyFailed: '无法访问剪贴板，请手动选择文字复制。',
+    aiShotsUsed: '选用 {count} 个镜头 / {seconds} 秒', aiUnused: '未选用', aiReasonPrefix: '理由：{value}', aiChapterPrefix: '章节：{value}', aiTransitionPrefix: '转场：{value}', aiDuration: '{value} 秒', aiSummaryPrefix: '内容：{value}',
+    roleHook: '冷开场钩子', roleSetup: '铺垫', roleDevelopment: '发展', roleClimax: '高潮', roleOutro: '收尾', roleBroll: '空镜',
+    aiVerdictOk: '✓ 方案可以应用', aiVerdictBlocked: '⛔ 方案已阻止', aiEstimated: '预计 {value} 秒', aiChronology: '正文顺序一致率 {value}%', aiOpeningTitle: '高级开篇方案 · 可整套切换，无需手调蒙版', aiOpeningAbout: '约 {value} 秒',
+    aiOpeningWritten: '已自动写入前 {count} 个镜头的蒙版、位置、羽化和转场；{overlays} 个独立叠加层、{sounds} 个开篇音效。', aiGlobalLine: '全片创意编排：{accents} 个重点事件 · 自动配乐 {music}。', aiApplyFull: '应用完整方案到时间线',
+    aiNoteFull: '方案中的蒙版、高级转场、叠加层、音效与配乐会随镜头一起应用到时间线（已有背景音乐则保留）。确认仅替换一次时间线；之后仍可删减或在检查器修改，并可一键撤销。', aiChangeAdd: '新增 {overlays} 个叠加层与 {sfx} 个音效', aiChangeMusicSet: '自动配乐「{name}」', aiShotCards: '镜头卡片（点击可在监视器预览）',
+    deleteNamedConfirm: '确定从时间线移除「{name}」吗？素材库中的原文件不会删除。',
+    removeMedia: '删除素材', removeNamedMedia: '删除素材：{name}', removeMediaConfirm: '确定删除素材 {name} 吗？文件会从素材库中删除，无法恢复。', mediaRemoved: '已删除素材 {name}。', mediaInUse: '{name} 正在时间线上使用，请先从时间线移除。',
+    aiMaskPrefix: '蒙版：{value}', aiMotionPrefix: '动效：{value}', aiPresetSwitching: '正在切换开篇方案…', aiPresetSwitched: '开篇方案已切换：{name}', timelineExtras: 'V2+ 叠加 {overlays} · 音效 {sfx} · 配乐 {music}', noMusic: '无'
   },
   en: {
     userGuide: 'Guide', guideNewTab: 'User guide in Chinese (opens a new tab)',
@@ -62,7 +73,18 @@ const translations = {
     aiSelectSources: 'Select at least one video source.', aiStarted: 'AI is analyzing the footage…', aiReadyBanner: 'AI plan is ready. Review and confirm it in the AI Director panel.', aiApplied: 'AI plan applied to the timeline and the project was saved.', aiUndone: 'Timeline restored to the state before the plan was applied.', aiCancelled: 'Plan discarded. The project is unchanged.',
     aiAppliedMessage: 'Plan applied: {summary}. AI clips on the timeline can still be edited by hand.', aiUndoConfirm: 'Click again to confirm undo', aiPreviewShot: 'Click to preview this shot in the monitor', aiExpired: 'The AI plan is no longer available. Generate a new one.',
     aiChangeReplace: 'Replace {count} video clip(s) on the current timeline', aiChangeOverlays: 'Remove {count} overlay(s)', aiChangeSfx: 'Remove {count} sound effect(s)', aiChangeMusic: 'Keep the background music settings', aiChangeSaved: 'The project is saved to disk right after applying and can be undone in one click', aiTransition: 'AI transition: {value}',
-    aiCloudHintAdmin: 'Cloud mode is not configured yet: open ', aiCloudHintLink: 'Accounts → AI Service', aiCloudHintAdminTail: ' and enter the service URL and API key.', aiCloudHintEditor: 'Cloud mode is not configured yet. Ask an administrator to enter the API settings under Accounts → AI Service.'
+    aiCloudHintAdmin: 'Cloud mode is not configured yet: open ', aiCloudHintLink: 'Accounts → AI Service', aiCloudHintAdminTail: ' and enter the service URL and API key.', aiCloudHintEditor: 'Cloud mode is not configured yet. Ask an administrator to enter the API settings under Accounts → AI Service.',
+    aiSourcesHint: 'The body follows capture time; clips without a capture time use the order below as their shooting order (↑ ↓ to adjust).', aiNoCaptureTime: 'no capture time', aiMoveUp: 'Move up', aiMoveDown: 'Move down', aiOpening: 'Opening', aiOpeningHook: 'Cold open: strongest shot first, then chronological', aiOpeningChrono: 'Strict chronological: no cold open',
+    aiStyle: 'Directing style', aiStyleAuto: 'Auto (from the brief)', aiStyleTravel: 'Travel story · goal—obstacle—discovery—payoff', aiStyleFood: 'Food tutorial · result hook, then strict steps', aiStyleLife: 'Life vlog · small goals and payoffs', aiStyleDrama: 'Short drama · conflict—attempt—twist—payoff', aiStyleDoc: 'Documentary · respect event order and meaning', aiStyleCinematic: 'Cinematic · restrained transitions and space', aiStyleTalk: 'Talking head · meaning first, cut pauses',
+    aiStoryTitle: 'Story line', aiStructureTitle: 'Structure and order', aiTechniquesTitle: 'Editing techniques used', aiSourcesTitle: 'Source usage', aiChangesTitle: 'Changes when applied', aiShotsTitle: 'Shot list: what was chosen and why', aiCopyReport: 'Copy text report', aiReportCopied: 'Text report copied to the clipboard.', aiReportCopyFailed: 'Clipboard unavailable. Select the text and copy it manually.',
+    aiShotsUsed: '{count} shot(s) / {seconds} sec used', aiUnused: 'not used', aiReasonPrefix: 'Why: {value}', aiChapterPrefix: 'Chapter: {value}', aiTransitionPrefix: 'Transition: {value}', aiDuration: '{value} sec', aiSummaryPrefix: 'Content: {value}',
+    roleHook: 'Cold open', roleSetup: 'Setup', roleDevelopment: 'Development', roleClimax: 'Climax', roleOutro: 'Outro', roleBroll: 'B-roll',
+    aiVerdictOk: '✓ Plan can be applied', aiVerdictBlocked: '⛔ Plan blocked', aiEstimated: 'about {value} sec', aiChronology: 'body chronology {value}%', aiOpeningTitle: 'Advanced opening · switch as a set, no manual masks', aiOpeningAbout: 'about {value} sec',
+    aiOpeningWritten: 'Masks, positions, feathering and transitions were written into the first {count} shot(s); {overlays} overlay layer(s), {sounds} opening sound cue(s).', aiGlobalLine: 'Whole-film treatment: {accents} accent event(s) · music {music}.', aiApplyFull: 'Apply Full Plan to Timeline',
+    aiNoteFull: 'Masks, advanced transitions, overlays, sound cues and music are applied together with the shots (existing background music is kept). Confirming replaces the timeline once; you can still trim or edit in the inspector afterwards, and undo in one click.', aiChangeAdd: 'adds {overlays} overlay(s) and {sfx} sound cue(s)', aiChangeMusicSet: 'music “{name}”', aiShotCards: 'Shot cards (click to preview in the monitor)',
+    deleteNamedConfirm: 'Remove “{name}” from the timeline? The original file stays in the media pool.',
+    removeMedia: 'Delete media', removeNamedMedia: 'Delete media: {name}', removeMediaConfirm: 'Delete {name}? The file is removed from the media pool and cannot be recovered.', mediaRemoved: 'Deleted {name}.', mediaInUse: '{name} is on the timeline. Remove it from the timeline first.',
+    aiMaskPrefix: 'Mask: {value}', aiMotionPrefix: 'Motion: {value}', aiPresetSwitching: 'Switching the opening preset…', aiPresetSwitched: 'Opening preset switched: {name}', timelineExtras: 'V2+ overlays {overlays} · SFX {sfx} · music {music}', noMusic: 'none'
   }
 };
 
@@ -90,7 +112,7 @@ const state = {
   timelineScale: Math.max(35, Math.min(150, Number(localStorage.getItem('lingjian-timeline-scale')) || 70)),
   lang: localStorage.getItem('lingjian-language') === 'en' ? 'en' : 'zh',
   csrfToken: document.querySelector('meta[name="csrf-token"]')?.content || '',
-  ai: {capabilities: null, plan: null, pollTimer: null, selected: [], view: 'aiSetup'},
+  ai: {capabilities: null, plan: null, pollTimer: null, selected: [], order: [], sources: [], view: 'aiSetup'},
 };
 
 function applyLanguage(shouldRender = true) {
@@ -172,6 +194,12 @@ function render() {
   $('#exportBtn').disabled = !state.loaded || !state.exportReady || !state.project.clips.length;
   $('#clipCount').textContent = state.project.clips.length;
   $('#timelineDuration').textContent = t('seconds', {value: Number(state.project.duration || 0).toFixed(1)});
+  const extras = $('#timelineExtras');
+  if (extras) {
+    const hasExtras = Number(state.project.overlay_count) || Number(state.project.sfx_count) || state.project.bgm_name;
+    extras.classList.toggle('hidden', !hasExtras);
+    if (hasExtras) extras.textContent = t('timelineExtras', {overlays: state.project.overlay_count || 0, sfx: state.project.sfx_count || 0, music: state.project.bgm_name || t('noMusic')});
+  }
   renderMedia();
   renderTimeline();
   renderInspector();
@@ -195,6 +223,7 @@ function renderMedia() {
         <span class="media-icon ${media.width ? '' : 'audio'}">${icon(media.width ? 'film' : 'music')}</span>
         <span class="media-info"><strong>${escapeHtml(media.name)}</strong><small>${t('seconds', {value: Number(media.duration).toFixed(1)})} · ${media.width ? `${media.width} × ${media.height}` : t('audio')}</small></span>
       </button>
+      <button type="button" class="remove-media" data-action="remove-media" aria-label="${escapeHtml(t('removeNamedMedia', {name: media.name}))}" title="${escapeHtml(t('removeMedia'))}">${icon('trash')}</button>
       <button type="button" class="add-media" data-action="add-media" ${media.width ? '' : 'disabled'} aria-label="${escapeHtml(t(media.width ? 'addNamedMedia' : 'audioPreviewOnly', {name: media.name}))}" title="${t(media.width ? 'addTimeline' : 'audioPreviewOnly')}">${icon('plus')}</button>
     </article>`).join('');
   grid.querySelectorAll('.media-card').forEach((card) => {
@@ -206,7 +235,19 @@ function renderMedia() {
     });
     const add = card.querySelector('[data-action="add-media"]');
     add.addEventListener('click', () => addMedia(media.id, add));
+    card.querySelector('[data-action="remove-media"]').addEventListener('click', () => removeMedia(media));
   });
+}
+
+async function removeMedia(media) {
+  const inUse = (state.project.clips || []).some((clip) => clip.media_id === media.id);
+  if (inUse) return banner(t('mediaInUse', {name: media.name}), 'error');
+  if (!confirm(t('removeMediaConfirm', {name: media.name}))) return;
+  try {
+    hydrate(await api(`/api/media/${media.id}`, {method: 'DELETE'}));
+    if (state.previewMediaId === media.id) { state.previewMediaId = null; }
+    banner(t('mediaRemoved', {name: media.name}), 'success');
+  } catch (error) { banner(error.message, 'error'); }
 }
 
 function renderTimeline() {
@@ -234,13 +275,17 @@ function renderTimeline() {
       <button type="button" class="clip-select" aria-pressed="${clip.id === state.selectedClipId}" aria-label="${escapeHtml(t('selectClip', {index: index + 1, name: clip.name}))}" title="${escapeHtml(clip.name)}">
         <strong>${String(index + 1).padStart(2, '0')} · ${escapeHtml(clip.name)}${clip.ai_selected ? '<span class="ai-badge">AI</span>' : ''}</strong><small>${t('seconds', {value: Number(clip.duration).toFixed(1)})}${clip.caption ? ` · ${escapeHtml(clip.caption)}` : ''}</small>
       </button>
-      <div class="timeline-actions"><button type="button" data-move="-1" aria-label="${t('moveLeft')}" ${index === 0 ? 'disabled' : ''}>${icon('left')}</button><button type="button" data-move="1" aria-label="${t('moveRight')}" ${index === clips.length - 1 ? 'disabled' : ''}>${icon('right')}</button></div>
+      <div class="timeline-actions"><button type="button" data-move="-1" aria-label="${t('moveLeft')}" ${index === 0 ? 'disabled' : ''}>${icon('left')}</button><button type="button" data-move="1" aria-label="${t('moveRight')}" ${index === clips.length - 1 ? 'disabled' : ''}>${icon('right')}</button><button type="button" class="danger" data-remove-clip aria-label="${escapeHtml(t('deleteClip'))}" title="${escapeHtml(t('deleteClip'))}">${icon('trash')}</button></div>
     </article>`).join('');
   audioTrack.innerHTML = clips.map((clip) => `<div class="audio-segment ${clip.has_audio ? '' : 'silent'}" style="--clip-width:${width(clip)}px">${clip.has_audio ? `${icon('music')}<span>${escapeHtml(clip.name)}</span>` : ''}</div>`).join('');
   updatePlayhead();
   timeline.querySelectorAll('.timeline-clip').forEach((node) => {
     node.querySelector('.clip-select').addEventListener('click', () => selectClip(node.dataset.clipId));
     node.querySelectorAll('[data-move]').forEach((button) => button.addEventListener('click', () => moveClip(node.dataset.clipId, Number(button.dataset.move))));
+    node.querySelector('[data-remove-clip]').addEventListener('click', (event) => { event.stopPropagation(); removeClip(node.dataset.clipId); });
+    node.addEventListener('keydown', (event) => {
+      if ((event.key === 'Delete' || event.key === 'Backspace') && !event.target.closest('input, textarea')) { event.preventDefault(); removeClip(node.dataset.clipId); }
+    });
     node.addEventListener('dragstart', (event) => {
       state.draggedClipId = node.dataset.clipId;
       node.classList.add('dragging');
@@ -435,13 +480,17 @@ $('#clipForm').addEventListener('submit', async (event) => {
   } catch (error) { banner(error.message, 'error'); }
 });
 
-$('#deleteClipBtn').addEventListener('click', async () => {
-  if (!state.selectedClipId || !confirm(t('deleteConfirm'))) return;
+async function removeClip(clipId) {
+  const clip = (state.project.clips || []).find((item) => item.id === clipId);
+  if (!clip || !confirm(t('deleteNamedConfirm', {name: clip.name}))) return;
   try {
-    hydrate(await api(`/api/timeline/clips/${state.selectedClipId}`, {method: 'DELETE'}));
-    state.selectedClipId = null; render(); banner(t('clipRemoved'), 'success');
+    hydrate(await api(`/api/timeline/clips/${clipId}`, {method: 'DELETE'}));
+    if (state.selectedClipId === clipId) state.selectedClipId = null;
+    render(); banner(t('clipRemoved'), 'success');
   } catch (error) { banner(error.message, 'error'); }
-});
+}
+
+$('#deleteClipBtn').addEventListener('click', () => { if (state.selectedClipId) removeClip(state.selectedClipId); });
 
 $('#saveBtn').addEventListener('click', async () => {
   const button = $('#saveBtn'); button.disabled = true;
@@ -572,17 +621,58 @@ function showAIView(name) {
   state.ai.view = name;
 }
 
+function aiSourceInfo(id) { return state.ai.sources.find((item) => item.id === id) || {}; }
+
+function syncAIOrder() {
+  // Keep the user's manual order; new media joins sorted by capture time, then name.
+  const ids = aiMedia().map((media) => media.id);
+  const known = state.ai.order.filter((id) => ids.includes(id));
+  const fresh = ids.filter((id) => !known.includes(id)).sort((a, b) => {
+    const ta = aiSourceInfo(a).capture_time || '', tb = aiSourceInfo(b).capture_time || '';
+    if (ta !== tb) return (ta === '' ? 1 : tb === '' ? -1 : ta.localeCompare(tb));
+    return String(aiSourceInfo(a).name || '').localeCompare(String(aiSourceInfo(b).name || ''));
+  });
+  state.ai.order = [...known, ...fresh];
+}
+
 function renderAISources() {
-  const media = aiMedia();
+  syncAIOrder();
   const list = $('#aiSourceList');
   const selected = new Set(state.ai.selected);
-  list.innerHTML = media.map((item) => `
-    <label><input type="checkbox" value="${item.id}" ${selected.has(item.id) ? 'checked' : ''}><span title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><small>${t('seconds', {value: Number(item.duration).toFixed(1)})}</small></label>`).join('');
-  $('#aiSourceEmpty').classList.toggle('hidden', media.length > 0);
-  $('#aiStart').disabled = media.length === 0;
+  const rows = state.ai.order.map((id, index) => {
+    const media = state.media.find((item) => item.id === id) || {};
+    const info = aiSourceInfo(id);
+    return `
+    <div class="ai-source-item" data-id="${id}">
+      <input type="checkbox" value="${id}" ${selected.has(id) ? 'checked' : ''} aria-label="${escapeHtml(media.name || '')}">
+      <span class="name" title="${escapeHtml(media.name || '')}">${index + 1}. ${escapeHtml(media.name || '')}</span>
+      <small>${t('seconds', {value: Number(media.duration || 0).toFixed(1)})} · ${info.capture_time ? escapeHtml(info.capture_time) : t('aiNoCaptureTime')}</small>
+      <span class="move"><button type="button" data-move="-1" title="${t('aiMoveUp')}" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" data-move="1" title="${t('aiMoveDown')}" ${index === state.ai.order.length - 1 ? 'disabled' : ''}>↓</button></span>
+    </div>`;
+  });
+  list.innerHTML = rows.join('');
+  $('#aiSourceEmpty').classList.toggle('hidden', state.ai.order.length > 0);
+  $('#aiStart').disabled = state.ai.order.length === 0;
   list.querySelectorAll('input').forEach((input) => input.addEventListener('change', () => {
     state.ai.selected = [...list.querySelectorAll('input:checked')].map((node) => node.value);
   }));
+  list.querySelectorAll('[data-move]').forEach((button) => button.addEventListener('click', () => {
+    const id = button.closest('.ai-source-item').dataset.id;
+    const from = state.ai.order.indexOf(id), to = from + Number(button.dataset.move);
+    if (from < 0 || to < 0 || to >= state.ai.order.length) return;
+    [state.ai.order[from], state.ai.order[to]] = [state.ai.order[to], state.ai.order[from]];
+    renderAISources();
+  }));
+}
+
+function roleLabel(role) {
+  const key = `role${String(role || 'development').charAt(0).toUpperCase()}${String(role || 'development').slice(1)}`;
+  return translations[state.lang]?.[key] ? t(key) : String(role || '');
+}
+
+function transitionLabel(value) {
+  const map = {none: 'cut', cut: 'cut', fade: 'fade', dissolve: 'dissolve', wipe_left: 'wipeLeft', wipeleft: 'wipeLeft', wipe_right: 'wipeRight', wiperight: 'wipeRight', slide_left: 'slideUp', slide_right: 'slideDown'};
+  return map[value] ? t(map[value]) : String(value || 'cut');
 }
 
 function renderAINotice() {
@@ -616,30 +706,54 @@ function renderAIProgress(plan) {
 
 function renderAIResult(plan) {
   const result = plan.result || {};
+  const validation = result.validation || {ok: true, blockers: [], chronology_ratio: 1, duration: result.duration};
+  const verdict = $('#aiVerdict');
+  verdict.className = `ai-verdict ${validation.ok ? '' : 'blocked'}`;
+  verdict.innerHTML = `${escapeHtml(t(validation.ok ? 'aiVerdictOk' : 'aiVerdictBlocked'))}<small>${escapeHtml(t('aiEstimated', {value: Number(validation.duration || result.duration || 0).toFixed(1)}))} · ${escapeHtml(t('aiChronology', {value: Math.round(Number(validation.chronology_ratio ?? 1) * 100)}))} · ${escapeHtml(result.summary || '')}</small>`;
+  $('#aiBlockers').innerHTML = (validation.blockers || []).map((text) => `<li>${escapeHtml(text)}</li>`).join('');
+  $('#aiBlockers').classList.toggle('hidden', !(validation.blockers || []).length);
+
+  const creative = result.creative || {};
+  const presets = result.opening_presets || [];
+  const select = $('#aiPreset');
+  select.innerHTML = presets.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.name)}</option>`).join('');
+  select.value = creative.requested || 'smart';
+  $('#aiOpeningName').textContent = creative.name || '';
+  $('#aiOpeningDuration').textContent = creative.name ? t('aiOpeningAbout', {value: Number(creative.duration_hint || 0).toFixed(1)}) : '';
+  $('#aiOpeningSummary').textContent = creative.summary || '';
+  const direction = result.global_direction || {};
+  $('#aiOpeningNote').textContent = creative.name
+    ? `${t('aiOpeningWritten', {count: creative.shot_count || 0, overlays: creative.overlay_count || 0, sounds: creative.sound_count || 0})} ${t('aiGlobalLine', {accents: direction.accent_count || 0, music: direction.music_name || t('noMusic')})}`
+    : '';
+
+  $('#aiReportText').textContent = result.report?.report_text || '';
   const changes = result.changes || {};
-  $('#aiSummary').textContent = result.summary || '';
-  $('#aiChanges').innerHTML = [
-    t('aiChangeReplace', {count: changes.replace_video_clips ?? 0}),
-    changes.remove_overlays ? t('aiChangeOverlays', {count: changes.remove_overlays}) : '',
-    changes.remove_sound_effects ? t('aiChangeSfx', {count: changes.remove_sound_effects}) : '',
-    changes.preserve_background_music ? t('aiChangeMusic') : '',
-    t('aiChangeSaved'),
-  ].filter(Boolean).map((text) => `<li>${escapeHtml(text)}</li>`).join('');
-  const notes = [...(result.warnings || []), ...(result.repairs || [])];
-  $('#aiWarnings').innerHTML = notes.map((text) => `<li>${escapeHtml(text)}</li>`).join('');
-  $('#aiWarnings').classList.toggle('hidden', notes.length === 0);
-  $('#aiShots').innerHTML = (result.shots || []).map((shot, index) => `
-    <button type="button" class="ai-shot" data-media-id="${escapeHtml(shot.media_id)}" data-start="${Number(shot.start)}" data-end="${Number(shot.end)}" title="${t('aiPreviewShot')}">
+  $('#aiApplyNote').textContent = `${t('aiNoteFull')} ${t('aiChangeReplace', {count: changes.replace_video_clips ?? 0})}，${t('aiChangeAdd', {overlays: changes.add_overlays ?? 0, sfx: changes.add_sound_effects ?? 0})}${changes.preserve_background_music ? `，${t('aiChangeMusic')}` : changes.music ? `，${t('aiChangeMusicSet', {name: changes.music})}` : ''}。`;
+  $('#aiApply').disabled = !validation.ok;
+
+  $('#aiShots').innerHTML = (result.shots || []).map((shot, index) => {
+    const length = Number(shot.end) - Number(shot.start);
+    const meta = [
+      shot.chapter ? t('aiChapterPrefix', {value: shot.chapter}) : '',
+      index > 0 ? t('aiTransitionPrefix', {value: transitionLabel(shot.transition)}) : '',
+      shot.mask && shot.mask !== 'none' ? t('aiMaskPrefix', {value: shot.mask}) : '',
+      shot.motion_effect && shot.motion_effect !== 'none' ? t('aiMotionPrefix', {value: shot.motion_effect}) : '',
+      shot.purpose ? shot.purpose : '',
+    ].filter(Boolean).join(' · ');
+    return `
+    <article class="ai-shot" data-media-id="${escapeHtml(shot.media_id)}" data-start="${Number(shot.start)}" data-end="${Number(shot.end)}" title="${t('aiPreviewShot')}">
       <span class="index">${String(index + 1).padStart(2, '0')}</span>
-      <div><h4 title="${escapeHtml(shot.name)}">${escapeHtml(shot.name)}</h4><p>${escapeHtml(shot.caption ? t('captionPrefix', {value: shot.caption}) : t('noCaption'))} · ${escapeHtml(shot.reason || '')}</p></div>
-      <span class="range">${Number(shot.start).toFixed(2)} – ${Number(shot.end).toFixed(2)}s</span>
-    </button>`).join('');
+      <div>
+        <div class="ai-shot-head"><span class="ai-role ${escapeHtml(shot.role || '')}">${escapeHtml(roleLabel(shot.role))}</span><h4 title="${escapeHtml(shot.name)}">${escapeHtml(shot.name)}</h4><span class="range">${Number(shot.start).toFixed(2)} – ${Number(shot.end).toFixed(2)}s · ${length.toFixed(1)}s</span></div>
+        ${shot.caption ? `<p class="caption">${escapeHtml(t('captionPrefix', {value: shot.caption}))}</p>` : ''}
+        <p class="reason">${escapeHtml(t('aiReasonPrefix', {value: shot.reason || ''}))}</p>
+        ${meta ? `<p class="meta">${escapeHtml(meta)}</p>` : ''}
+      </div>
+    </article>`;
+  }).join('');
   $('#aiShots').querySelectorAll('.ai-shot').forEach((node) => node.addEventListener('click', () => {
     const media = state.media.find((item) => item.id === node.dataset.mediaId);
-    if (media) {
-      $('#aiDialog').close();
-      preview(media.url, media.name, Number(node.dataset.start), Number(node.dataset.end), null, media.id);
-    }
+    if (media) preview(media.url, media.name, Number(node.dataset.start), Number(node.dataset.end));
   }));
 }
 
@@ -693,7 +807,9 @@ async function openAIDialog() {
   $('#aiError').classList.add('hidden');
   $('#aiDialog').showModal();
   try {
-    state.ai.capabilities = await api('/api/ai/capabilities');
+    const [capabilities, sources] = await Promise.all([api('/api/ai/capabilities'), api('/api/ai/sources')]);
+    state.ai.capabilities = capabilities;
+    state.ai.sources = sources.items || [];
     renderAI();
   } catch (error) { banner(error.message, 'error'); }
 }
@@ -725,14 +841,16 @@ $('#aiMode').addEventListener('change', renderAINotice);
 $('#aiSetup').addEventListener('submit', async (event) => {
   event.preventDefault();
   const mode = $('#aiMode').value;
-  const available = new Set(aiMedia().map((media) => media.id));
+  const selected = new Set(state.ai.selected);
   const body = {
-    media_ids: state.ai.selected.filter((id) => available.has(id)),
+    media_ids: state.ai.order.filter((id) => selected.has(id)),
     revision: Number(state.project.revision),
     mode,
     target_duration: Number($('#aiTarget').value),
     prompt: $('#aiPrompt').value.trim(),
     cloud_consent: mode === 'cloud' && $('#aiConsent').checked,
+    opening: $('#aiOpening').value,
+    style: $('#aiStyle').value,
   };
   if (!body.media_ids.length) return banner(t('aiSelectSources'), 'error');
   $('#aiStart').disabled = true;
@@ -743,6 +861,21 @@ $('#aiSetup').addEventListener('submit', async (event) => {
     state.ai.pollTimer = setTimeout(pollAIPlan, 800);
   } catch (error) { banner(error.message, 'error'); }
   finally { $('#aiStart').disabled = aiMedia().length === 0; }
+});
+$('#aiCopyReport').addEventListener('click', async () => {
+  const text = state.ai.plan?.result?.report?.report_text || '';
+  try { await navigator.clipboard.writeText(text); banner(t('aiReportCopied'), 'success'); }
+  catch (error) { banner(t('aiReportCopyFailed'), 'error'); }
+});
+$('#aiPreset').addEventListener('change', async () => {
+  const plan = state.ai.plan;
+  if (!plan) return;
+  banner(t('aiPresetSwitching'));
+  try {
+    state.ai.plan = await api(`/api/ai/plans/${plan.id}/opening`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({preset: $('#aiPreset').value})});
+    renderAI();
+    banner(t('aiPresetSwitched', {name: state.ai.plan.result?.creative?.name || ''}), 'success');
+  } catch (error) { banner(error.message, 'error'); renderAI(); }
 });
 $('#aiCancel').addEventListener('click', () => aiPost('cancel'));
 $('#aiDiscard').addEventListener('click', () => aiPost('cancel'));

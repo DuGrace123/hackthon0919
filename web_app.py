@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import atexit
 import copy
+import dataclasses
+import struct
+import tempfile
+import wave
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -19,7 +24,8 @@ from flask import Flask, g, jsonify, redirect, render_template, request, send_fr
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
-from ai_story_planner import AIRequestError, APIConfig, list_models, protect_secret, unprotect_secret
+from ai_story_planner import AIRequestError, APIConfig, list_models, protect_secret, transcribe_audio, unprotect_secret
+from builtin_music import music_by_id
 from ai_workflow import (
     AIWorkflow,
     MediaSource,
@@ -89,6 +95,19 @@ def _atomic_json(path: Path, data: dict) -> None:
     os.replace(temporary, path)
 
 
+def capture_stamp(value) -> str:
+    """Normalize a probe capture_order (filename stamp or ISO creation time) to 14 comparable digits."""
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d{14}", text):
+        return text
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})", text)
+    return "".join(match.groups()) if match else ""
+
+
+def format_stamp(stamp: str) -> str:
+    return f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]}:{stamp[12:14]}" if stamp else ""
+
+
 def _load_ai_settings(path: Path) -> dict | None:
     """Admin-saved cloud settings; the key is stored with protect_secret (DPAPI on Windows)."""
     try:
@@ -121,6 +140,18 @@ def _default_cloud_tester(config: APIConfig) -> list[str] | None:
     return list_models(config, timeout=15)
 
 
+def _default_transcription_tester(config: APIConfig) -> None:
+    """Send half a second of silence to /v1/audio/transcriptions; proves the transcription model really works."""
+    with tempfile.TemporaryDirectory(prefix="lingjian-probe-") as folder:
+        path = Path(folder) / "probe.wav"
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(struct.pack("<h", 0) * 8000)
+        transcribe_audio(dataclasses.replace(config, timeout=min(config.timeout, 30)), str(path))
+
+
 def _default_export_runner(ffmpeg: str, project: Project, output: Path) -> dict:
     width, height = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (1080, 1080)}.get(
         project.ratio, (720, 1280)
@@ -141,7 +172,7 @@ def _default_export_runner(ffmpeg: str, project: Project, output: Path) -> dict:
 
 
 def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner=None, ai_analyzer=None,
-               cloud_tester=None) -> Flask:
+               cloud_tester=None, transcription_tester=None) -> Flask:
     app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
     production = os.environ.get("LINGJIAN_ENV", "development") == "production"
     setup_token = os.environ.get("LINGJIAN_SETUP_TOKEN", "")
@@ -260,6 +291,17 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             raise ValueError("找不到该素材")
         return item
 
+    def ensure_capture_order(item: dict) -> str:
+        """Media uploaded before capture times were recorded gets probed once; result is cached in the catalog."""
+        if "capture_order" not in item and (ffmpeg or probe_fn is not None):
+            try:
+                metadata = probe(ffmpeg, str(item["path"]))
+                item["capture_order"] = str(metadata.get("capture_order") or "")
+            except Exception:
+                item["capture_order"] = ""
+            save_catalog()
+        return capture_stamp(item.get("capture_order"))
+
     def clip_json(clip: Clip) -> dict:
         data = asdict(clip)
         media = next((item for item in catalog.values() if item.get("path") == clip.path), None)
@@ -276,6 +318,9 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
                 "duration": project.duration,
                 "revision": revision,
                 "clips": [clip_json(clip) for clip in project.clips],
+                "overlay_count": len(project.overlays),
+                "sfx_count": len(project.sfx),
+                "bgm_name": ((music_by_id(project.bgm_id) or {}).get("name") if project.bgm_id else "") or (Path(project.bgm).name if project.bgm else ""),
             },
             "media": [
                 {**item, "url": f"/media/{item['stored_name']}"}
@@ -534,6 +579,22 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             raise
         return jsonify(media=created), 201
 
+    @app.delete("/api/media/<media_id>")
+    def delete_media(media_id: str):
+        with lock:
+            item = catalog_item(media_id)
+            used_by = [clip for clip in project.clips if clip.path == item["path"]]
+            used_by += [overlay for overlay in project.overlays if overlay.path == item["path"]]
+            if used_by:
+                return jsonify(error=f"该素材正在时间线上使用（{len(used_by)} 处），请先从时间线移除后再删除。", code="media_in_use"), 409
+            catalog.pop(media_id, None)
+            save_catalog()
+            try:
+                Path(item["path"]).unlink(missing_ok=True)
+            except OSError:
+                app.logger.warning("素材文件删除失败：%s", item["path"])
+            return jsonify(deleted=True, **state_json())
+
     @app.get("/media/<path:filename>")
     def serve_media(filename: str):
         return send_from_directory(upload_path, filename, conditional=True)
@@ -646,9 +707,11 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
                 raise WorkflowError("invalid_media", "只有视频素材可以参与 AI 剪辑，请取消选择音频文件。", 422)
             if ai_analyzer is None and not ffmpeg:
                 raise WorkflowError("ffmpeg_unavailable", "未找到 FFmpeg，请设置 LINGJIAN_FFMPEG 后重启服务。", 503)
+            with lock:
+                stamp = ensure_capture_order(catalog[media_id]) if media_id in catalog else ""
             return MediaSource(
                 str(item["id"]), Path(item["path"]), str(item["name"]), float(item["duration"]),
-                bool(item.get("has_audio")), str(item.get("capture_order") or ""),
+                bool(item.get("has_audio")), stamp,
             )
 
         def commit_project(self, project_id: str, owner_id: str, candidate: Project,
@@ -670,6 +733,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     env_config = config_from_environment()
     ai_settings = _load_ai_settings(ai_settings_path)
     check_cloud = cloud_tester or _default_cloud_tester
+    check_transcription = transcription_tester or _default_transcription_tester
 
     def cloud_config_from(saved: dict | None) -> APIConfig:
         if not saved or not saved.get("api_key"):
@@ -784,10 +848,19 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
         except ValueError as exc:
             return jsonify(ok=False, code="invalid_config", error=str(exc))
         listed = isinstance(models, list)
+        transcription_error = None
+        try:
+            check_transcription(config)
+        except AIRequestError as exc:
+            transcription_error = str(exc)
+            looks_like_speech_model = any(word in config.transcription_model.lower() for word in ("transcribe", "whisper", "speech", "asr"))
+            if not looks_like_speech_model:
+                transcription_error += " 转写模型需要是语音转写模型，例如 gpt-4o-mini-transcribe。"
         return jsonify(
-            ok=True, models_listed=listed, model_count=len(models) if listed else 0,
+            ok=transcription_error is None, models_listed=listed, model_count=len(models) if listed else 0,
             model_found=(config.model in models) if listed else None,
             transcription_model_found=(config.transcription_model in models) if listed else None,
+            transcription_ok=transcription_error is None, transcription_error=transcription_error,
         )
 
     def ai_owner() -> str:
@@ -817,10 +890,12 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     def ai_sources():
         with lock:
             items = [
-                {"id": item["id"], "name": item["name"], "duration": item["duration"], "has_audio": bool(item.get("has_audio"))}
+                {"id": item["id"], "name": item["name"], "duration": item["duration"], "has_audio": bool(item.get("has_audio")),
+                 "capture_time": format_stamp(ensure_capture_order(item))}
                 for item in sorted(catalog.values(), key=lambda value: value.get("created_at", ""))
                 if int(item.get("width") or 0)
             ]
+            items.sort(key=lambda value: (value["capture_time"] == "", value["capture_time"], value["name"].lower()))
             return jsonify(items=items, revision=revision)
 
     @app.get("/api/ai/plans")
@@ -837,11 +912,13 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
         if isinstance(target, bool) or not isinstance(target, (int, float)):
             raise WorkflowError("invalid_duration", "目标时长必须为 5 到 180 秒。", 422)
         mode, prompt = payload.get("mode", "local"), payload.get("prompt", "")
-        if not isinstance(mode, str) or not isinstance(prompt, str):
+        opening, style = payload.get("opening", "hook"), payload.get("style", "")
+        if not all(isinstance(value, str) for value in (mode, prompt, opening, style)):
             raise WorkflowError("invalid_request", "请求格式不正确。", 422)
         plan = workflow.create(
             WEB_PROJECT_ID, ai_owner(), media_ids=media_ids, revision=ai_revision(payload.get("revision")),
             mode=mode, target_duration=target, prompt=prompt, cloud_consent=payload.get("cloud_consent") is True,
+            opening=opening, style=style.strip(),
         )
         return jsonify(plan), 202
 
@@ -852,6 +929,14 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
     @app.post("/api/ai/plans/<plan_id>/cancel")
     def ai_cancel_plan(plan_id: str):
         return jsonify(workflow.cancel(WEB_PROJECT_ID, plan_id, ai_owner()))
+
+    @app.post("/api/ai/plans/<plan_id>/opening")
+    def ai_set_opening(plan_id: str):
+        payload = ai_payload()
+        preset = payload.get("preset", "smart")
+        if not isinstance(preset, str):
+            raise WorkflowError("invalid_request", "请求格式不正确。", 422)
+        return jsonify(workflow.set_opening(WEB_PROJECT_ID, plan_id, ai_owner(), preset=preset))
 
     @app.post("/api/ai/plans/<plan_id>/apply")
     def ai_apply_plan(plan_id: str):
