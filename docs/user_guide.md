@@ -17,6 +17,10 @@ python scripts/build_user_guide.py
 
 ## 发布规则
 
-Render 跟踪 `main`，配置为 `autoDeployTrigger: checksPass`。PR 合并后，主分支的 GitHub Actions 全部通过才触发构建。部署成功后域名不变；个人分支更新和未合并的 PR 不会更新正式网站。部署状态可在 Render 的 Deploys 页面查看。
+Render 跟踪 `main`，配置为 `autoDeployTrigger: checksPass`。自动部署还要求通过 Git Provider 连接本仓库；只有设置部署选项、但未完成 GitHub 仓库授权时，不会自动更新。连接完成后，PR 合并且主分支的 GitHub Actions 全部通过才触发构建。个人分支更新和未合并的 PR 不会更新正式网站。
+
+如果 Deploys 页面没有出现新部署，在确认 `main` 的检查通过后，使用 `Manual Deploy → Deploy latest commit` 发布。不要用 `Deploy a specific commit` 代替，它会关闭自动部署。发布成功后域名不变。
+
+2026-09-19 发布指南时，控制台的 Git Provider 显示 `No repositories found`，因此本次使用手动发布。后续应在 Render 的 Settings → Build → Source 中连接仓库，并在下一次主分支更新时验证自动触发。
 
 当前免费实例的上传、工程、账户及网页保存的 AI 设置都在临时文件系统。重新部署会丢失这些数据，上线前应告知团队并下载需要保留的成片。参见 [Render 自动部署](https://render.com/docs/deploys#automatic-deploys) 与 [免费服务限制](https://render.com/docs/free)。
