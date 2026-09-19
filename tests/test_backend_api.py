@@ -93,6 +93,17 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"]["errors"][0]["path"], "clips[0].end")
         self.assertEqual(self.client.get("/api/v1/projects").json(), [])
 
+    def test_lone_surrogate_escapes_are_rejected_not_500(self):
+        # "\ud800" is valid JSON text but not a UTF-8 encodable string; it must be a 422, not a crash on write.
+        response = self.client.post("/api/v1/projects", headers={"Content-Type": "application/json"},
+                                    content=b'{"title": "\\ud800"}')
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["detail"]["errors"][0]["path"], "title")
+        nested = self.client.post("/api/v1/projects", headers={"Content-Type": "application/json"},
+                                  content=b'{"project": {"edit_plan": {"k\\udc00": "\\ud800"}}}')
+        self.assertEqual(nested.status_code, 422, nested.text)
+        self.assertEqual(self.client.get("/api/v1/projects").json(), [])
+
     def test_cors_allows_browser_frontends(self):
         preflight = self.client.options("/api/v1/projects", headers={
             "Origin": "http://localhost:5173", "Access-Control-Request-Method": "PUT"})
