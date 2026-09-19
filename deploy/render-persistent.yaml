@@ -1,12 +1,13 @@
-# Temporary hackathon demo only. Files and accounts can disappear on restart.
-# Select this Blueprint path explicitly; the root render.yaml uses paid storage.
+# Paid hosting: review the price in Render before applying this Blueprint.
+# Keep one instance and one Gunicorn worker until shared state is externalized.
 services:
   - type: web
-    name: lingjian-demo
+    name: lingjian-studio
     runtime: docker
-    plan: free
+    plan: 1c-2g
     region: singapore
     branch: main
+    numInstances: 1
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     autoDeployTrigger: checksPass
@@ -14,10 +15,14 @@ services:
       - key: LINGJIAN_ENV
         value: production
       - key: LINGJIAN_WEB_WORKSPACE
-        value: /tmp/lingjian
+        value: /var/data/lingjian
       - key: LINGJIAN_MAX_UPLOAD_MB
-        value: "50"
+        value: "512"
       - key: LINGJIAN_SECRET_KEY
         generateValue: true
       - key: LINGJIAN_SETUP_TOKEN
         generateValue: true
+    disk:
+      name: lingjian-data
+      mountPath: /var/data
+      sizeGB: 5

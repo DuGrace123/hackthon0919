@@ -8,8 +8,8 @@
 
 | 方案 | 配置文件 | 用途与限制 |
 | --- | --- | --- |
-| Render 持久化 | 仓库根目录 `render.yaml` | 1 核 / 2 GB，5 GB 磁盘，素材、账户、保存的工程和已完成导出可跨重启保留。基础费用约 $26.25/月，额外流量另计。 |
-| Render 免费演示 | `deploy/render-free.yaml` | 免费实例会休眠，临时文件和账户可能在休眠、重启或更新后消失。上传限制 50 MB，先用几秒钟的小视频测试，512 MB 内存不保证复杂导出成功。 |
+| Render 免费演示（默认） | 仓库根目录 `render.yaml` | 免费实例会休眠，素材和账户在休眠、重启或更新后丢失。上传限制 50 MB，先用几秒钟的小视频测试，512 MB 内存不保证复杂导出成功。 |
+| Render 持久化 | `deploy/render-persistent.yaml` | 1 核 / 2 GB，5 GB 磁盘，素材、账户、保存的工程和已完成导出可跨重启保留。基础费用约 $26.25/月，额外流量另计。 |
 | 已有云服务器 | `Dockerfile` | 使用同一镜像，提供持久化卷、HTTPS 反向代理和进程管理即可。 |
 
 价格核对日期：2026-09-19。[Render 定价](https://render.com/pricing)中 1 核 / 2 GB 为 $25/月，磁盘为 $0.25/GB/月。创建服务前以控制台报价为准；仓库中的配置文件本身不会购买资源。GPT API 用量由 AI 服务商另行计费。
@@ -18,8 +18,8 @@
 
 ## 在 Render 创建服务
 
-1. 登录 [Render 控制台](https://dashboard.render.com/)，选择 **New → Blueprint**，关联 GitHub 仓库 `DuGrace123/hackthon0919`，分支选 `main`。
-2. 选择 Blueprint 路径：持久化方案为 `render.yaml`；免费演示为 `deploy/render-free.yaml`。核对实例、磁盘和费用后创建。无需另外部署 FastAPI，也无需填写前端构建命令。
+1. 登录 [Render 控制台](https://dashboard.render.com/)，打开 [免费演示部署入口](https://render.com/deploy?repo=https://github.com/DuGrace123/hackthon0919)。也可选择 **New → Blueprint**，关联 GitHub 仓库 `DuGrace123/hackthon0919`，分支选 `main`。
+2. 默认使用 `render.yaml` 的免费演示方案；如果明确需要付费持久化，再选择 `deploy/render-persistent.yaml`。核对实例、磁盘和费用后创建。无需另外部署 FastAPI，也无需填写前端构建命令。
 3. 等待 Docker 构建及健康检查通过，在服务页面打开平台实际分配的 `https://….onrender.com` 地址。可先访问 `/api/health`，确认 `export_ready` 为 `true`。
 4. 在服务的 **Environment** 中查看平台自动生成的 `LINGJIAN_SETUP_TOKEN`。在网站首次设置页输入该初始化密钥，再由管理员设置自己的用户名和密码。不要把初始化密钥、会话密钥或 AI API key 放进 Git、聊天或网址。
 5. 管理员进入 **账户管理**，为四位组员创建各自的编辑者账户，再分享网址。初始化完成后无法再次通过设置页创建管理员；持久化方案可以移除 `LINGJIAN_SETUP_TOKEN`，免费方案应保留它以便数据重置后重新初始化。

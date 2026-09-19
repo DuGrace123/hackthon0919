@@ -1,10 +1,10 @@
-# Paid hosting: review the price in Render before applying this Blueprint.
-# Keep one instance and one Gunicorn worker until shared state is externalized.
+# Free hackathon demo: uploads and accounts are temporary and reset on restart.
+# For persistent storage, review deploy/render-persistent.yaml and its costs.
 services:
   - type: web
-    name: lingjian-studio
+    name: lingjian-demo
     runtime: docker
-    plan: 1c-2g
+    plan: free
     region: singapore
     branch: main
     numInstances: 1
@@ -15,14 +15,10 @@ services:
       - key: LINGJIAN_ENV
         value: production
       - key: LINGJIAN_WEB_WORKSPACE
-        value: /var/data/lingjian
+        value: /tmp/lingjian
       - key: LINGJIAN_MAX_UPLOAD_MB
-        value: "512"
+        value: "50"
       - key: LINGJIAN_SECRET_KEY
         generateValue: true
       - key: LINGJIAN_SETUP_TOKEN
         generateValue: true
-    disk:
-      name: lingjian-data
-      mountPath: /var/data
-      sizeGB: 5

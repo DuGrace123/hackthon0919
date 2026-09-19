@@ -23,8 +23,8 @@ jobs:
           -e LINGJIAN_WEB_WORKSPACE=/tmp/test-workspace
           -v "$PWD/tests:/tests:ro" lingjian-web:test
           python -m unittest discover -s /tests -p 'test_web*.py'
-      - name: Render a real video and restart the production server
+      - name: Render a real video and restart within the free plan memory limit
         run: >-
-          docker run --rm --cpus=2 --memory=2g
+          docker run --rm --cpus=1 --memory=512m
           -v "$PWD/tests:/tests:ro" lingjian-web:test
           python /tests/cloud_smoke.py
