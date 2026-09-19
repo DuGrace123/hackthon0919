@@ -1,7 +1,7 @@
 """``python -m backend`` starts the HTTP API with uvicorn.
 
 Environment: LINGJIAN_HOST (127.0.0.1), LINGJIAN_PORT (8000), LINGJIAN_WORKSPACE (./workspace),
-LINGJIAN_CORS_ORIGINS (*).
+LINGJIAN_CORS_ORIGINS (explicit browser origins), LINGJIAN_FFMPEG (optional executable).
 """
 from __future__ import annotations
 

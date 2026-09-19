@@ -8,16 +8,21 @@ Interactive documentation is served at ``/docs`` when the app is running.
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from backend import APP_VERSION
-from backend.project_store import TITLE_MAX_CHARS, ProjectStore, ProjectStoreError
+from backend.ai_adapter import LOCAL_OWNER, ProjectStoreAIBackend, resolve_ffmpeg
+from backend.project_store import CAPTION_MAX_CHARS, TITLE_MAX_CHARS, ProjectStore, ProjectStoreError
+from ai_workflow import AIWorkflow, WorkflowError, config_from_environment
+from ai_workflow_api import create_ai_router
 from video_editing_engine import Clip, Project
 
 
@@ -50,7 +55,7 @@ class CreateProjectRequest(BaseModel):
 
 
 class SaveProjectRequest(BaseModel):
-    revision: int = Field(..., ge=1, description="上次读取到的 revision；与服务器不一致时返回 409")
+    revision: StrictInt = Field(..., ge=1, description="上次读取到的 revision；与服务器不一致时返回 409")
     project: dict[str, Any] = Field(..., description="完整工程内容（version 5 结构，见 docs/backend_api.md）", examples=[EXAMPLE_PROJECT])
 
 
@@ -74,19 +79,52 @@ class ProjectSummaryResponse(BaseModel):
 
 
 def _cors_origins() -> list[str]:
-    raw = os.environ.get("LINGJIAN_CORS_ORIGINS", "*")
-    return [x.strip() for x in raw.split(",") if x.strip()] or ["*"]
+    raw = os.environ.get("LINGJIAN_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    origins = [x.strip().rstrip('/') for x in raw.split(",") if x.strip()]
+    if '*' in origins:
+        raise ValueError('LINGJIAN_CORS_ORIGINS must list explicit browser origins; wildcard is not supported')
+    return origins
 
 
-def create_app(store: ProjectStore | None = None) -> FastAPI:
+def create_app(store: ProjectStore | None = None, *, ffmpeg: str | None = None) -> FastAPI:
     """Build the FastAPI application; pass a store to use a specific workspace (tests do)."""
     store = store or ProjectStore.from_env()
+    adapter = ProjectStoreAIBackend(store, resolve_ffmpeg(ffmpeg))
+    workflow = AIWorkflow(adapter, adapter.ffmpeg, cloud_config=config_from_environment(), caption_limit=CAPTION_MAX_CHARS)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        workflow.close()
+
     app = FastAPI(
         title="灵剪 AI 后端", version=APP_VERSION,
         description="工程的创建、读取、保存与删除。保存使用乐观锁：读取时拿到 revision，保存时带回，过期返回 409。",
+        lifespan=lifespan,
     )
     app.state.store = store
-    app.add_middleware(CORSMiddleware, allow_origins=_cors_origins(), allow_methods=["*"], allow_headers=["*"])
+    app.state.ai_workflow = workflow
+    origins = _cors_origins()
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PUT", "DELETE"],
+                       allow_headers=["Content-Type"])
+
+    @app.middleware('http')
+    async def check_browser_origin(request: Request, call_next):
+        origin = request.headers.get('origin')
+        local_host = request.url.hostname in ('localhost', '127.0.0.1', '::1')
+        own_origin = f'{request.url.scheme}://{request.url.netloc}'
+        if origin and origin not in origins and not (local_host and origin == own_origin):
+            return JSONResponse(status_code=403, content={'detail': {'code': 'origin_not_allowed', 'message': '此网页来源未获允许。'}})
+        return await call_next(request)
+
+    def current_local_user(request: Request) -> str:
+        # ProjectStore is a single local workspace, not a multi-user identity store.
+        # Keep the newly enabled media/cloud operations inaccessible from the LAN.
+        client_host = request.client.host if request.client else ''
+        hostname = urlsplit('//' + request.headers.get('host', '')).hostname
+        if client_host not in ('127.0.0.1', '::1') or hostname not in ('localhost', '127.0.0.1', '::1'):
+            raise HTTPException(status_code=403, detail={'code': 'local_only', 'message': '当前 AI 接口仅供本机使用。'})
+        return LOCAL_OWNER
 
     @app.exception_handler(ProjectStoreError)
     async def _store_error(_: Request, exc: ProjectStoreError) -> JSONResponse:
@@ -102,7 +140,15 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
 
     @api.get("/health", tags=["系统"], summary="服务状态")
     def health() -> dict:
-        return {"status": "ok", "version": APP_VERSION, "workspace": str(store.workspace)}
+        return {"status": "ok", "version": APP_VERSION, "workspace": str(store.workspace),
+                "ai": workflow.capabilities()}
+
+    @api.get('/projects/{project_id}/ai/sources', tags=['AI workflow'])
+    def ai_sources(project_id: str, owner_id: str = Depends(current_local_user)) -> dict:
+        try:
+            return adapter.list_sources(project_id, owner_id)
+        except WorkflowError as exc:
+            raise HTTPException(status_code=exc.status, detail={'code': exc.code, 'message': str(exc)}) from None
 
     @api.get("/projects", response_model=list[ProjectSummaryResponse], tags=["工程"], summary="列出工程")
     def list_projects() -> list[dict]:
@@ -130,4 +176,5 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
         return Response(status_code=204)
 
     app.include_router(api)
+    app.include_router(create_ai_router(workflow, current_user=current_local_user, prefix='/api/v1'))
     return app

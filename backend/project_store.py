@@ -16,8 +16,10 @@ the project/clip structure; this module only adds the guarantees the store needs
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -147,7 +149,15 @@ def _now() -> str:
 
 
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def project_version_token(record: ProjectRecord) -> str:
+    """Detect backup recovery and desktop writes that can reuse a revision number."""
+    state = {'project': record.project, 'revision': record.revision,
+             'recovered_from_backup': record.recovered_from_backup}
+    return hashlib.sha256(json.dumps(state, ensure_ascii=False, sort_keys=True,
+                                     allow_nan=False).encode('utf-8')).hexdigest()
 
 
 class _Checker:
@@ -338,6 +348,12 @@ def validate_project_payload(data) -> dict:
                 seen[item_id] = i
     if errors:
         raise InvalidProject(errors)
+    # edit_plan/edit_log contain nested, otherwise opaque data; keep the complete
+    # project JSON portable and reject non-finite values before writing to disk.
+    try:
+        json.dumps(body, allow_nan=False)
+    except (ValueError, TypeError):
+        raise InvalidProject([{"path": "", "message": "工程必须包含可序列化的有限 JSON 数值"}]) from None
     canonical = dict(body)
     canonical["version"] = SCHEMA_VERSION
     for key in _ITEM_RULES:
@@ -425,7 +441,7 @@ class ProjectStore:
         path = self._path(record.id)
         if keep_backup and path.exists():
             shutil.copy2(path, self._path(record.id, BACKUP_SUFFIX))
-        atomic_write_text(path, json.dumps(record.to_file_dict(), ensure_ascii=False, indent=2))
+        atomic_write_text(path, json.dumps(record.to_file_dict(), ensure_ascii=False, indent=2, allow_nan=False))
 
     # ---- public api ------------------------------------------------------------------
     def create(self, title: str | None = None, ratio: str | None = None, project: dict | None = None) -> ProjectRecord:
@@ -465,14 +481,15 @@ class ProjectStore:
         summaries.sort(key=lambda x: x["updated_at"], reverse=True)
         return summaries
 
-    def save(self, project_id: str, project: dict, expected_revision: int) -> ProjectRecord:
+    def save(self, project_id: str, project: dict, expected_revision: int, *,
+             expected_token: str | None = None) -> ProjectRecord:
         project_id = self._check_id(project_id)
         if not isinstance(expected_revision, int) or isinstance(expected_revision, bool) or expected_revision < 1:
             raise InvalidProject([{"path": "revision", "message": "revision 必须是正整数（上次读取到的版本号）"}])
         clean = validate_project_payload(project)
         with self._lock(project_id):
             current = self._read(project_id)
-            if current.revision != expected_revision:
+            if current.revision != expected_revision or (expected_token is not None and project_version_token(current) != expected_token):
                 raise RevisionConflict(expected_revision, current)
             record = ProjectRecord(project_id, current.revision + 1, current.created_at, _now(), clean)
             # A damaged main file must not overwrite the good backup we just served.

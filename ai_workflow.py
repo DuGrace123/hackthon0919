@@ -51,6 +51,7 @@ class MediaSource:
 class ProjectSnapshot:
     project: Project
     revision: int
+    version_token: str | None = None
 
 
 class WorkflowBackend(Protocol):
@@ -63,7 +64,7 @@ class WorkflowBackend(Protocol):
     def get_project(self, project_id: str, owner_id: str) -> ProjectSnapshot: ...
     def resolve_media(self, project_id: str, media_id: str, owner_id: str) -> MediaSource: ...
     def commit_project(self, project_id: str, owner_id: str, project: Project,
-                       expected_revision: int) -> ProjectSnapshot: ...
+                       expected_revision: int, *, expected_token: str | None = None) -> ProjectSnapshot: ...
 
 
 def config_from_environment() -> APIConfig:
@@ -141,6 +142,7 @@ class _Record:
     finished: threading.Event = field(default_factory=threading.Event)
     plan: dict | None = None
     applied_revision: int | None = None
+    applied_token: str | None = None
 
 
 class AIWorkflow:
@@ -152,7 +154,7 @@ class AIWorkflow:
     def __init__(self, backend: WorkflowBackend, ffmpeg: str, *,
                  cloud_config: APIConfig | None = None, max_workers: int = 2,
                  max_pending: int = 4, max_records: int = 100, ttl_seconds: int = 3600,
-                 local_analyzer: Callable = analyze_local):
+                 local_analyzer: Callable = analyze_local, caption_limit: int = 120):
         if min(max_workers, max_records, ttl_seconds) < 1 or max_pending < 0:
             raise ValueError('Invalid workflow limits')
         self.backend, self.ffmpeg = backend, ffmpeg
@@ -164,6 +166,7 @@ class AIWorkflow:
             if not 1 <= self.config.timeout <= 180:
                 raise ValueError('Cloud timeout must be between 1 and 180 seconds')
         self.local_analyzer = local_analyzer
+        self.caption_limit = caption_limit
         self.ttl, self.max_records = ttl_seconds, max_records
         self._lock = threading.RLock()
         self._slots = threading.BoundedSemaphore(max_workers + max_pending)
@@ -309,12 +312,12 @@ class AIWorkflow:
                     start, end = decision['start'], decision['end']
                     if not all(math.isfinite(x) for x in (start, end)) or not 0 <= start < end <= source.duration + .001:
                         raise WorkflowError('invalid_plan', 'AI 方案超出素材范围，请重新生成。', 422)
-                    decision['caption'] = decision['caption'][:200]
+                    decision['caption'] = decision['caption'][:self.caption_limit]
                     decision['reason'] = decision['reason'][:400]
                     shots.append({'id': decision['decision_id'], 'media_id': source.id,
                                   'name': Path(source.name.replace('\\', '/')).name[:200],
                                   'start': start, 'end': end, 'role': decision['role'],
-                                  'caption': decision['caption'][:200], 'reason': decision['reason'][:400],
+                                  'caption': decision['caption'], 'reason': decision['reason'],
                                   'transition': decision['transition'], 'has_audio': source.has_audio})
                 with self._lock:
                     checkpoint()
@@ -359,7 +362,7 @@ class AIWorkflow:
             candidate.clips = plan_to_clips(copy.deepcopy(record.plan), Clip)
             for clip, decision in zip(candidate.clips, record.plan['decisions']):
                 clip.has_audio = record.sources[decision['source_index']].has_audio
-                clip.caption = clip.caption[:200]
+                clip.caption = clip.caption[:self.caption_limit]
                 clip.reason = clip.reason[:400]
             # Existing auxiliary tracks would otherwise remain at unrelated old positions.
             candidate.overlays, candidate.sfx = [], []
@@ -367,8 +370,10 @@ class AIWorkflow:
             candidate.edit_plan = copy.deepcopy(record.plan)
             candidate.edit_log.append({'type': 'apply_ai_plan', 'transaction_id': plan_id,
                                        'engine': record.public['mode'], 'clip_count': len(candidate.clips)})
-            saved = self.backend.commit_project(project_id, owner_id, candidate, revision)
+            options = {'expected_token': record.snapshot.version_token} if record.snapshot.version_token is not None else {}
+            saved = self.backend.commit_project(project_id, owner_id, candidate, revision, **options)
             record.applied_revision = saved.revision
+            record.applied_token = saved.version_token
             record.public.update(status='applied', revision=saved.revision, message='方案已应用，可撤销')
             return copy.deepcopy(record.public)
 
@@ -380,7 +385,8 @@ class AIWorkflow:
                 raise WorkflowError('invalid_state', '当前方案没有可撤销的应用记录。', 409)
             if revision != record.applied_revision:
                 raise RevisionConflict()
-            saved = self.backend.commit_project(project_id, owner_id, copy.deepcopy(record.snapshot.project), revision)
+            options = {'expected_token': record.applied_token} if record.applied_token is not None else {}
+            saved = self.backend.commit_project(project_id, owner_id, copy.deepcopy(record.snapshot.project), revision, **options)
             record.public.update(status='undone', revision=saved.revision, message='已恢复应用前的工程')
             return copy.deepcopy(record.public)
 

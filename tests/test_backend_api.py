@@ -89,9 +89,9 @@ class BackendApiTests(unittest.TestCase):
         preflight = self.client.options("/api/v1/projects", headers={
             "Origin": "http://localhost:5173", "Access-Control-Request-Method": "PUT"})
         self.assertEqual(preflight.status_code, 200)
-        self.assertEqual(preflight.headers.get("access-control-allow-origin"), "*")
+        self.assertEqual(preflight.headers.get("access-control-allow-origin"), "http://localhost:5173")
         plain = self.client.get("/api/v1/health", headers={"Origin": "http://localhost:5173"})
-        self.assertEqual(plain.headers.get("access-control-allow-origin"), "*")
+        self.assertEqual(plain.headers.get("access-control-allow-origin"), "http://localhost:5173")
 
     def test_import_desktop_project_upgrades_version(self):
         old = {"version": 3, "title": "旧版", "clips": [{

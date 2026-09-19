@@ -10,8 +10,8 @@ def run_hidden(args, **kwargs):
     kwargs.setdefault('creationflags', 0x08000000 if os.name=='nt' else 0)
     return subprocess.run(args, **kwargs)
 
-def probe_media(ffmpeg:str, path:str)->dict:
-    p=run_hidden([ffmpeg,'-hide_banner','-i',path],capture_output=True,text=True,encoding='utf-8',errors='replace')
+def probe_media(ffmpeg:str, path:str, *, timeout:float|None=None)->dict:
+    p=run_hidden([ffmpeg,'-hide_banner','-i',path],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=timeout)
     text=p.stderr
     m=re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)',text)
     if not m: raise ValueError(f'无法读取媒体：{Path(path).name}')
