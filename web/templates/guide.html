@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="灵剪网页版快速指南：上传素材、手动与 AI 剪辑、导出 MP4，以及数据保存说明。">
+  <title>{{ guide.title }} · 使用指南</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='base.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='guide.css') }}">
+</head>
+<body>
+  <header class="guide-topbar">
+    <a href="{{ url_for('index') }}" class="brand"><span class="brand-mark">✦</span> 灵剪 <small>STUDIO</small></a>
+    <nav aria-label="指南操作">
+      <a class="button-link" href="{{ url_for('guide_pdf') }}" download>下载 PDF</a>
+      <a class="button-link primary" href="{{ url_for('index') }}">进入剪辑台</a>
+    </nav>
+  </header>
+  <main class="guide-shell">
+    <section class="guide-intro" aria-labelledby="guide-title">
+      <p class="eyebrow">QUICK START · 一页就会用</p>
+      <h1 id="guide-title">{{ guide.title }}</h1>
+      <p class="guide-lead">{{ guide.subtitle }}</p>
+      <a class="site-address" href="{{ guide.url }}">{{ guide.url }}</a>
+      <p class="muted">{{ guide.access }}</p>
+    </section>
+
+    <ol class="guide-steps" aria-label="制作视频的步骤">
+      {% for step in guide.steps %}
+      <li>
+        <span class="step-number" aria-hidden="true">0{{ loop.index }}</span>
+        <div><h2>{{ step.title }}</h2><p>{{ step.body }}</p></div>
+      </li>
+      {% endfor %}
+    </ol>
+    <aside class="guide-note" aria-label="使用 AI 前"><p>{{ guide.ai_tip }}</p></aside>
+
+    <section class="guide-storage" aria-labelledby="storage-title">
+      <h2 id="storage-title">数据存在哪里？</h2>
+      <dl class="storage-grid">
+        {% for item in guide.storage %}
+        <div><dt>{{ item.place }}</dt><dd>{{ item.content }}</dd></div>
+        {% endfor %}
+      </dl>
+      <p class="storage-warning"><strong>记得下载成片。</strong> {{ guide.storage_warning }}</p>
+      <p class="team-tip"><strong>五人协作：</strong>{{ guide.team_tip }}</p>
+    </section>
+
+    <section class="guide-faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">遇到问题时</h2>
+      {% for item in guide.faqs %}
+      <details><summary>{{ item.question }}</summary><p>{{ item.answer }}</p></details>
+      {% endfor %}
+    </section>
+    <footer class="guide-footer">
+      <span>适用于当前演示站 · <a href="https://render.com/docs/free" target="_blank" rel="noopener noreferrer">免费服务说明</a></span>
+      <a href="{{ url_for('guide_pdf') }}" download>下载一页版，发给组员 →</a>
+    </footer>
+  </main>
+</body>
+</html>

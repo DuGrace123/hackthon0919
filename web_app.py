@@ -220,7 +220,7 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
             if not expected or not supplied or not hmac.compare_digest(expected, supplied):
                 return jsonify(error="安全令牌无效，请刷新页面后重试"), 403
 
-        public_endpoints = {"login_page", "auth_status", "auth_setup", "auth_login", "health", "static"}
+        public_endpoints = {"login_page", "guide_page", "guide_pdf", "auth_status", "auth_setup", "auth_login", "health", "static"}
         if request.endpoint in public_endpoints:
             return None
         if g.current_user is None:
@@ -320,6 +320,18 @@ def create_app(workspace: str | Path | None = None, probe_fn=None, export_runner
         if current_account():
             return redirect(url_for("index"))
         return render_template("login.html")
+
+    @app.get("/guide")
+    def guide_page():
+        guide = json.loads((ROOT / "web" / "user_guide.json").read_text(encoding="utf-8"))
+        return render_template("guide.html", guide=guide)
+
+    @app.get("/guide/download")
+    def guide_pdf():
+        return send_from_directory(
+            ROOT / "web" / "static" / "guides", "lingjian-quick-start.pdf",
+            as_attachment=True, download_name="灵剪快速上手.pdf", mimetype="application/pdf",
+        )
 
     @app.get("/api/auth/status")
     def auth_status():

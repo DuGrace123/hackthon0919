@@ -7,6 +7,7 @@ body { height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-dire
 .project-name input:not(:hover):not(:focus) { border-color: transparent; }
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .save-button { border-color: transparent; }
+.guide-link { border-color: transparent; color: var(--muted); }
 .account-menu { position: relative; margin-left: 8px; }
 .account-menu summary { display: flex; align-items: center; gap: 5px; cursor: pointer; list-style: none; }
 summary::-webkit-details-marker { display: none; }
@@ -184,6 +185,8 @@ summary::-webkit-details-marker { display: none; }
   .project-name input { padding: 4px 0 !important; font-size: 12px; }
   .topbar-actions { gap: 5px; }
   .topbar-actions button { padding: 7px 9px; font-size: 11px; }
+  .guide-link { padding: 6px; }
+  .guide-link span { display: none; }
   .save-button > .icon { display: none; }
   .account-menu { margin-left: 4px; }
   .account-menu summary > .icon { display: none; }
