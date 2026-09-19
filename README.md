@@ -37,6 +37,17 @@ python -m venv .venv
 
 The application uses PySide6 for its interface, NumPy and Pillow for image processing, and ONNX Runtime for person segmentation. Dependency versions are defined in [requirements.txt](requirements.txt) and [pyproject.toml](pyproject.toml).
 
+### Run the backend API
+
+The HTTP API stores projects as `.ljproject` files under `workspace/` and serves interactive documentation at `/docs`:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-backend.txt
+.\.venv\Scripts\python.exe -m backend
+```
+
+See the [backend API guide](docs/backend_api.md) for the endpoints, the project data structure, and revision-based conflict handling.
+
 For media processing, LingJian first looks for `ffmpeg.exe` beside `video_editor_app.py`, then looks for `ffmpeg` on `PATH`. The local distribution includes the Windows executable. Keep the `assets/` and `models/` folders at the project root so the application can find its resources.
 
 ## Make your first video
@@ -89,6 +100,9 @@ Model files, installers, and generated videos are excluded by `.gitignore`, so a
 ├── person_segmentation.py     # Local person segmentation and tracking
 ├── builtin_music.py           # Bundled music metadata and generation
 ├── builtin_sound_effects.py   # Bundled sound-effect metadata and generation
+├── backend/
+│   ├── project_store.py       # Project validation, atomic saves, revisions, id boundary
+│   └── api.py                 # FastAPI routes over the project store
 ├── assets/
 │   ├── fonts/                 # Bundled fonts and their licenses
 │   ├── music/                 # Generated music loops
@@ -103,7 +117,8 @@ Model files, installers, and generated videos are excluded by `.gitignore`, so a
 ├── tests/                     # Portable checks and FFmpeg rendering tests
 ├── ffmpeg.exe                 # Bundled Windows media-processing executable
 ├── pyproject.toml             # Project metadata and dependency constraints
-└── requirements.txt           # Dependencies for running from source
+├── requirements.txt           # Dependencies for running from source
+└── requirements-backend.txt   # Extra dependencies for the backend API
 ```
 
 Start with `video_editor_app.py` to follow the application workflow. Assisted editing runs through `ai_story_planner.py`, `edit_plan.py`, and `creative_treatment.py`; `video_editing_engine.py` owns the project operations and rendering commands. Files in `examples/` are local sample artifacts. Sample projects may reference source media that is not included.
@@ -116,7 +131,7 @@ Run the portable regression suite from the project root:
 python tests/run_regression_tests.py
 ```
 
-It covers edit-plan validation, automatic ordering, continuity, editing preferences, long-form sequencing, capture chronology, and the AI request flow. These checks use the Python standard library and a local mock API; they do not require a GUI, a cloud key, or FFmpeg. The mock API needs permission to listen on the loopback interface.
+It covers edit-plan validation, automatic ordering, continuity, editing preferences, long-form sequencing, capture chronology, the project store (validation, atomic saves, revisions, backups), and the AI request flow. These checks use the Python standard library and a local mock API; they do not require a GUI, a cloud key, or FFmpeg. The mock API needs permission to listen on the loopback interface. The HTTP checks in `tests/test_backend_api.py` run when `fastapi` is installed and are skipped otherwise.
 
 On Windows with FFmpeg available, run the additional rendering checks from the project root:
 
@@ -131,6 +146,7 @@ These generate test media and render actual output files. The portable suite doe
 
 - [Download and checksum](docs/download_guide.md)
 - [Cloud API configuration](docs/cloud_ai_setup.md)
+- [Backend API and project persistence](docs/backend_api.md)
 - [Release notes](docs/release_notes.md)
 - [Creative-treatment design](docs/creative_treatment_design.md)
 - [Third-party components and licenses](docs/third_party_notices.md)

@@ -79,6 +79,18 @@ def quality_from_scan(scan:dict,start:float,end:float)->dict:
     exposure=max(0,100-abs(yavg-128)*1.15);color=max(0,100-abs(savg-55)*.8)
     return {'exposure':round(exposure,1),'color':round(color,1),'sharpness':round(sharpness,1),'technical':round(.35*exposure+.15*color+.5*sharpness,1)}
 
+def atomic_write_text(path,text,encoding='utf-8'):
+    """Write the whole file or leave the old one untouched: temp file beside the target, fsync, then os.replace."""
+    target=Path(path);target.parent.mkdir(parents=True,exist_ok=True);tmp=target.with_name(f'{target.name}.tmp-{uuid.uuid4().hex[:8]}')
+    try:
+        with open(tmp,'w',encoding=encoding) as f:f.write(text);f.flush();os.fsync(f.fileno())
+        os.replace(tmp,target)
+    except BaseException:
+        try:tmp.unlink()
+        except OSError:pass
+        raise
+    return str(target)
+
 @dataclass
 class Clip:
     path:str; start:float; end:float; name:str=''; caption:str=''; position:str='bottom'; transition:str='fade'; volume:float=1.0; has_audio:bool=True; id:str=field(default_factory=lambda:str(uuid.uuid4()))
@@ -136,7 +148,7 @@ class Project:
             length=min(c.duration,max(.2,min(7,target-used)));mid=(c.start+c.end)/2
             out.append(Clip(c.path,max(c.start,mid-length/2),min(c.end,mid+length/2),c.name,'', 'bottom','fade',c.volume,c.has_audio));used+=out[-1].duration
         self.clips=out
-    def save(self,path): Path(path).write_text(json.dumps(self.to_dict(),ensure_ascii=False,indent=2),encoding='utf-8')
+    def save(self,path): atomic_write_text(path,json.dumps(self.to_dict(),ensure_ascii=False,indent=2))
     def to_dict(self): return {'version':5,'title':self.title,'bgm':self.bgm,'bgm_volume':self.bgm_volume,'bgm_id':self.bgm_id,'bgm_ducking':self.bgm_ducking,'bgm_fade_in':self.bgm_fade_in,'bgm_fade_out':self.bgm_fade_out,'ratio':self.ratio,'prompt':self.prompt,'edit_plan':self.edit_plan,'edit_log':self.edit_log[-100:],'clips':[asdict(c) for c in self.clips],'sfx':[asdict(x) for x in self.sfx],'overlays':[asdict(x) for x in self.overlays]}
     @classmethod
     def from_dict(cls,d):
